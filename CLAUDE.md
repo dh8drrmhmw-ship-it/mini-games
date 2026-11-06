@@ -38,7 +38,7 @@
 - TypeScript 加 Canvas 2D，不用游戏引擎。同一份玩法代码既做浏览器测试页，也打包成微信小游戏。
 - 玩法代码放在 `src/games/<编号>/`，不能直接用浏览器的接口（window、document、localStorage 等）。画面、触摸、存档、声音、广告一律通过平台层（`src/platform/`）。这条由代码检查（`eslint.config.js`）拦截，不要为了让检查通过去放宽它。
 - 包要小：微信小游戏首包有大小限制，玩法代码不引用外部包，图片和声音要压缩。
-- 关卡由程序生成时，用固定种子的随机数，并且电脑先自己解一遍，保证每关有解。
+- 关卡由程序生成时，用固定种子的随机数，并且电脑先自己解一遍，保证每关有解。奶茶调配的关卡提前生成在 `levels.json`，改了生成规则要运行 `npm run levels`。
 
 ## 第三方资源
 
@@ -53,3 +53,4 @@
 
 - 提交前 `npm run check`（类型检查、代码检查、测试）必须全部通过，然后直接推送到 main（D-005）。
 - 推送到 main、自动检查通过后，测试页自动部署到 https://dh8drrmhmw-ship-it.github.io/mini-games/ 。推送后用 GitHub Actions 的运行记录确认「部署测试链接」成功。
+- GitHub Pages 用不了时（比如仓库还是私有的），临时把 `npm run build` 生成的 `dist/<编号>/artifact.html` 发布到 claude.ai，并更新 `docs/进度.md` 里的链接。

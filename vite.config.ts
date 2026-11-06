@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 function gitVersion(): string {
@@ -20,6 +21,12 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    rollupOptions: {
+      input: {
+        home: resolve(import.meta.dirname, 'index.html'),
+        'milk-tea': resolve(import.meta.dirname, 'milk-tea/index.html'),
+      },
+    },
     modulePreload: { polyfill: false },
     reportCompressedSize: false,
   },

@@ -20,7 +20,8 @@ export const games: readonly GameEntry[] = [
     id: 'milk-tea',
     name: '奶茶调配',
     pitch: '倒水的玩法，但要按顾客的菜单，把配料一层一层倒成一杯分层奶茶。',
-    status: '候选',
+    status: '原型',
+    path: 'milk-tea/',
   },
   {
     id: 'penalty',

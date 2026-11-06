@@ -10,12 +10,13 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/standalone.ts",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "levels": "node scripts/milk-tea-levels.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
