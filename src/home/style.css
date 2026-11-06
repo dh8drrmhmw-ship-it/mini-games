@@ -1,0 +1,202 @@
+/* 首页：一列卡片，暖色、圆角，像小游戏本身的气质。 */
+:root {
+  --bg: #fbf6ef;
+  --surface: #ffffff;
+  --fg: #2a211b;
+  --muted: #7a6a5d;
+  --line: #eadfd2;
+  --accent: #d9622b;
+  --idea-bg: #f1ebe3;
+  --idea-fg: #6e5f53;
+  --proto-bg: #fde6d6;
+  --proto-fg: #a4441a;
+  --polish-bg: #e6eefc;
+  --polish-fg: #2f5aa8;
+  --live-bg: #e1f3e6;
+  --live-fg: #24773f;
+  --font: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #17130f;
+    --surface: #221c17;
+    --fg: #f1e8de;
+    --muted: #b3a394;
+    --line: #362d25;
+    --accent: #f08a54;
+    --idea-bg: #2d2620;
+    --idea-fg: #c8b8a8;
+    --proto-bg: #3d2416;
+    --proto-fg: #f4a676;
+    --polish-bg: #1c2a42;
+    --polish-fg: #9dbcf5;
+    --live-bg: #183522;
+    --live-fg: #8bd8a2;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #17130f;
+  --surface: #221c17;
+  --fg: #f1e8de;
+  --muted: #b3a394;
+  --line: #362d25;
+  --accent: #f08a54;
+  --idea-bg: #2d2620;
+  --idea-fg: #c8b8a8;
+  --proto-bg: #3d2416;
+  --proto-fg: #f4a676;
+  --polish-bg: #1c2a42;
+  --polish-fg: #9dbcf5;
+  --live-bg: #183522;
+  --live-fg: #8bd8a2;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 40px
+    max(16px, env(safe-area-inset-left));
+}
+
+.masthead {
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+h1 {
+  margin: 4px 0 8px;
+  font-size: 30px;
+  line-height: 1.2;
+}
+
+.lede {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.build {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.cards {
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  display: block;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+
+a.card:active {
+  transform: scale(0.99);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-num {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.card-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+}
+
+.pill {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pill-idea {
+  background: var(--idea-bg);
+  color: var(--idea-fg);
+}
+
+.pill-proto {
+  background: var(--proto-bg);
+  color: var(--proto-fg);
+}
+
+.pill-polish {
+  background: var(--polish-bg);
+  color: var(--polish-fg);
+}
+
+.pill-live {
+  background: var(--live-bg);
+  color: var(--live-fg);
+}
+
+.card-pitch {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.card-go {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fine {
+  margin-top: 28px;
+  color: var(--muted);
+  font-size: 13px;
+}

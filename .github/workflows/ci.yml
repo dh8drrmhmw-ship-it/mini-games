@@ -1,0 +1,61 @@
+# 自动检查和部署：每次推送到 main 都跑一遍类型检查、代码检查、测试和构建，通过后部署测试链接。
+# 需要在 Settings → Pages 里把 Source 选成「GitHub Actions」（只要设一次）。
+# 改完设置后不想等下次提交，可以在 Actions 页面手动运行（workflow_dispatch），同样会部署。
+name: 检查和部署
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 检查、测试、构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: 类型检查
+        run: npm run typecheck
+      - name: 代码检查（含玩法代码不碰浏览器接口的规则）
+        run: npm run lint
+      - name: 自动测试
+        run: npm test
+      - name: 构建测试页
+        run: npm run build
+      - name: 上传测试页
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !github.event.repository.private
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    name: 部署测试链接
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
