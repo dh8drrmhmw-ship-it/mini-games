@@ -14,6 +14,8 @@
   --polish-fg: #2f5aa8;
   --live-bg: #e1f3e6;
   --live-fg: #24773f;
+  --shelved-bg: #ece7e1;
+  --shelved-fg: #8f8478;
   --font: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   color-scheme: light;
 }
@@ -34,6 +36,8 @@
     --polish-fg: #9dbcf5;
     --live-bg: #183522;
     --live-fg: #8bd8a2;
+    --shelved-bg: #2a2520;
+    --shelved-fg: #9c8f82;
     color-scheme: dark;
   }
 }
@@ -53,6 +57,8 @@
   --polish-fg: #9dbcf5;
   --live-bg: #183522;
   --live-fg: #8bd8a2;
+  --shelved-bg: #2a2520;
+  --shelved-fg: #9c8f82;
   color-scheme: dark;
 }
 
@@ -176,6 +182,11 @@ a.card:active {
 .pill-polish {
   background: var(--polish-bg);
   color: var(--polish-fg);
+}
+
+.pill-shelved {
+  background: var(--shelved-bg);
+  color: var(--shelved-fg);
 }
 
 .pill-live {

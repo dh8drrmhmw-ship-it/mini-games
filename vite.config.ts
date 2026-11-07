@@ -25,6 +25,7 @@ export default defineConfig({
       input: {
         home: resolve(import.meta.dirname, 'index.html'),
         'milk-tea': resolve(import.meta.dirname, 'milk-tea/index.html'),
+        penalty: resolve(import.meta.dirname, 'penalty/index.html'),
       },
     },
     modulePreload: { polyfill: false },

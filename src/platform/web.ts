@@ -4,6 +4,7 @@
  * 测试版没有真广告：弹一个说明框，点「看完了」就算看完。微信版以后用微信的激励视频广告。
  */
 import type { Game, Host, View } from '../games/shared/host.ts';
+import { createWebSound } from './web-sound.ts';
 
 function safeArea(): { top: number; bottom: number } {
   const probe = document.createElement('div');
@@ -83,8 +84,17 @@ export function runInBrowser(create: (host: Host) => Game): void {
 
   const params = new URLSearchParams(location.search);
   const levelParam = Number(params.get('level'));
+  const sound = createWebSound(save.get('sound') !== 'off', (on) => save.set('sound', on ? 'on' : 'off'));
   const host: Host = {
     save,
+    sound,
+    vibrate(kind) {
+      try {
+        navigator.vibrate?.(kind === 'heavy' ? 35 : 12);
+      } catch {
+        // iPhone 的浏览器不支持震动
+      }
+    },
     showRewardedAd: fakeRewardedAd,
     startLevel: Number.isInteger(levelParam) && levelParam > 0 ? levelParam : undefined,
   };
@@ -108,11 +118,36 @@ export function runInBrowser(create: (host: Host) => Game): void {
   resize();
   window.addEventListener('resize', resize);
 
+  const local = (e: PointerEvent): [number, number] => {
+    const r = canvas.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+  let activePointer: number | null = null;
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    const r = canvas.getBoundingClientRect();
-    game.pointerDown(e.clientX - r.left, e.clientY - r.top);
+    sound.unlock();
+    if (activePointer !== null) return; // 只认第一根手指
+    activePointer = e.pointerId;
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // 不支持就算了
+    }
+    game.pointerDown(...local(e));
   });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== activePointer) return;
+    e.preventDefault();
+    const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e];
+    for (const ev of events.length > 0 ? events : [e]) game.pointerMove?.(...local(ev));
+  });
+  const end = (e: PointerEvent): void => {
+    if (e.pointerId !== activePointer) return;
+    activePointer = null;
+    game.pointerUp?.(...local(e));
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
   // iOS：防止双击放大、长按选字
   canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
 

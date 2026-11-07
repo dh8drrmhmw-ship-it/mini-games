@@ -19,8 +19,29 @@ export interface SaveStore {
   set(key: string, value: string): void;
 }
 
+/** 音效名字。声音由平台层现场合成，不用素材文件。 */
+export type SoundName =
+  | 'whistle'
+  | 'kick'
+  | 'net'
+  | 'post'
+  | 'save'
+  | 'cheer'
+  | 'groan'
+  | 'click'
+  | 'milestone';
+
+export interface Sound {
+  play(name: SoundName): void;
+  readonly enabled: boolean;
+  setEnabled(on: boolean): void;
+}
+
 export interface Host {
   save: SaveStore;
+  sound: Sound;
+  /** 震一下（不支持的手机什么都不做）。 */
+  vibrate(kind: 'light' | 'heavy'): void;
   /** 播放激励视频广告。看完返回 true，中途关掉返回 false。placement：哪个按钮触发的，方便以后看数据。 */
   showRewardedAd(placement: string): Promise<boolean>;
   /** 测试用：直接从第几关开始。 */
@@ -36,4 +57,7 @@ export interface Game {
   update(dt: number): void;
   render(ctx: Canvas2D): void;
   pointerDown(x: number, y: number): void;
+  /** 手指按住移动、松开（要划手指的游戏才用）。 */
+  pointerMove?(x: number, y: number): void;
+  pointerUp?(x: number, y: number): void;
 }

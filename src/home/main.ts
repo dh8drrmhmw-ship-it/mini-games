@@ -7,6 +7,7 @@ const statusClass: Record<GameStatus, string> = {
   原型: 'proto',
   打磨中: 'polish',
   已上线: 'live',
+  搁置: 'shelved',
 };
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
