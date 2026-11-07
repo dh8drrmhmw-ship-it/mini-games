@@ -91,10 +91,8 @@ export function unprojectGoalPlane(cam: Camera, sx: number, sy: number): { x: nu
 // ---------- 射门 ----------
 
 export interface Swipe {
-  /** 手指划过的点（屏幕坐标），第一个是按下的地方，最后一个是松开的地方 */
-  points: readonly { x: number; y: number }[];
-  /** 用时（秒） */
-  duration: number;
+  /** 手指划过的点（屏幕坐标，t 是秒），第一个是按下的地方，最后一个是松开的地方 */
+  points: readonly { x: number; y: number; t: number }[];
 }
 
 export interface Shot {
@@ -106,28 +104,57 @@ export interface Shot {
   /** 实际落点（加上脚下的偏差以后） */
   tx: number;
   ty: number;
-  /** 0～1：划得越快，球越快 */
+  /** 0～1：松手那一下划得越快，球越快 */
   power: number;
   /** 球飞到门线要几秒 */
   time: number;
-  /** 弧线：中途往旁边弯多少米（香蕉球） */
+  /** 弧线：中途往旁边弯多少米（正数往右鼓） */
   bend: number;
   /** 划得太短，球软绵绵地滚过去 */
   weak: boolean;
 }
 
+/** 罚球球员的三项能力（1～5），见 players.ts。 */
+export interface Kicker {
+  power: number;
+  accuracy: number;
+  curve: number;
+}
+
 export const SHOT_TIME_FAST = 0.42;
-export const SHOT_TIME_SLOW = 0.78;
+export const SHOT_TIME_SLOW = 0.85;
 
 export type SwipeProblem = 'short' | 'down';
 
 /**
- * 手指划的一下 → 射门。往想踢的位置划：
- * - 方向定左右：划的方向一直延长到球门线，指到哪里就往哪里踢；
- * - 手指松开的地方如果已经到了球门里，就踢向那里（高度也照着来）；没到球门就是贴地球；
- * - 划得越快球越快，但越容易偏。
+ * 松手前最后一小段划得多快（每秒划过几个「球到门线」的距离）。
+ * 手指一停就抬起来时，最后那个「抬起」的点和前一个点在同一个地方，不算停顿；
+ * 真的停住一会儿（超过 0.06 秒）再松手，就是轻推。
  */
-export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng): Shot | SwipeProblem {
+export function releaseSpeed(points: Swipe['points'], toGoal: number): number {
+  const n = points.length;
+  let end = n - 1;
+  if (n >= 3) {
+    const a = points[n - 1]!;
+    const b = points[n - 2]!;
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 2 && a.t - b.t < 0.06) end = n - 2;
+  }
+  const last = points[end]!;
+  let j = end;
+  while (j > 0 && last.t - points[j - 1]!.t <= 0.12) j--;
+  if (j === end) j = Math.max(0, end - 1);
+  const p = points[j]!;
+  const dt = Math.max(1 / 60, last.t - p.t);
+  return Math.hypot(last.x - p.x, last.y - p.y) / toGoal / dt;
+}
+
+/**
+ * 手指划的一下 → 射门：
+ * - 落点：手指从球出发划到球门里哪一点，球就飞向哪一点；没划到球门线的高度是贴地球。
+ * - 弧线：球一开始沿着你最开始划的方向飞，最后拐到落点。先往左划再拐到右边，就是往右拐的弧线球。
+ * - 力量：看松手那一下划得多快。越快球越快，但越容易偏。
+ */
+export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng, kicker: Kicker): Shot | SwipeProblem {
   const pts = swipe.points;
   const a = pts[0]!;
   const b = pts[pts.length - 1]!;
@@ -139,8 +166,7 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   if (dy > -toGoal * 0.12 || len < toGoal * 0.15) return dy > 0 ? 'down' : 'short';
   if (Math.abs(dx) > -dy * 2.2) return 'down';
 
-  // 把这一划平移到球上：手指从球出发划到了哪里，就踢向哪里。
-  // 还没划到球门线的高度，就沿着划的方向延长到球门线，踢贴地球。
+  // 落点：把这一划平移到球上
   const lift = -dy / toGoal; // 往上划了「球到门线」距离的几倍
   let aimX: number;
   let aimY: number;
@@ -154,25 +180,37 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   }
   const weak = lift < 0.45;
 
-  // 速度：每秒划过多少个「球到门线」的距离
-  const speed = len / toGoal / Math.max(0.03, swipe.duration);
-  const power = weak ? 0 : clamp01((speed - 2.2) / (7 - 2.2));
-  const time = weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - SHOT_TIME_FAST) * power;
+  // 力量
+  const speed = releaseSpeed(pts, toGoal);
+  const power = weak ? 0 : clamp01((speed - 2) / (7.5 - 2));
+  const fastest = 0.52 - 0.035 * (kicker.power - 1);
+  const time = weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - fastest) * power;
 
-  // 脚下的偏差：越用力越不准
-  const sd = 0.06 + 0.32 * power * power;
+  // 弧线：最开始划的方向（离起点一小段距离的那一点）延长到球门线
+  let bend = 0;
+  if (!weak) {
+    const launch = pts.find((p) => Math.hypot(p.x - a.x, p.y - a.y) >= toGoal * 0.35) ?? b;
+    const ly = launch.y - a.y;
+    if (ly < -4) {
+      const x0 = unprojectGoalPlane(cam, ball.x + (launch.x - a.x) * (toGoal / -ly), goalLine).x;
+      // 球的横向位置 x(u) = 落点 × u + 弧线 × 4u(1-u)，一开始的方向是 落点 + 4 × 弧线
+      const limit = 0.35 + 0.3 * (kicker.curve - 1);
+      bend = clamp((x0 - aimX) / 4, -limit, limit);
+    }
+  }
+
+  // 脚下的偏差：越用力越不准，弧线越大越不准，球员越准偏得越少
+  const sd = (0.05 + 0.3 * power * power) * (1.45 - 0.2 * (kicker.accuracy - 1)) + Math.abs(bend) * 0.06;
   const tx = aimX + gauss(rng) * sd;
   const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
 
-  // 弧线：划的路线中间往一边鼓出来多少
-  let maxDev = 0;
-  for (const p of pts) {
-    const dev = ((p.x - a.x) * dy - (p.y - a.y) * dx) / Math.max(1, len);
-    if (Math.abs(dev) > Math.abs(maxDev)) maxDev = dev;
-  }
-  const bend = weak ? 0 : clamp(-(maxDev / Math.max(1, len)) * 6, -1.4, 1.4);
-
   return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak };
+}
+
+/** 球速（公里每小时），踢出去以后显示。 */
+export function ballSpeedKmh(shot: Shot): number {
+  const dist = Math.hypot(SPOT_Z, shot.tx, shot.ty) + Math.abs(shot.bend) * 0.3;
+  return Math.round((dist / shot.time) * 3.6);
 }
 
 function clamp01(v: number): number {

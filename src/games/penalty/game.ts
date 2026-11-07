@@ -5,6 +5,7 @@
 import { inRect, roundRectPath, wrapText, type Rect } from '../shared/canvas.ts';
 import type { Canvas2D, Game, Host, View } from '../shared/host.ts';
 import { mix32, Rng } from '../shared/rng.ts';
+import { isUnlocked, SHOOTERS, type Shooter } from './players.ts';
 import * as D from './draw.ts';
 import {
   chooseGuess,
@@ -25,6 +26,7 @@ import {
 } from './keeper.ts';
 import {
   ballAt,
+  ballSpeedKmh,
   BALL_R,
   GOAL_H,
   makeCamera,
@@ -44,6 +46,8 @@ const KEY = {
   history: 'penalty.history',
   runs: 'penalty.runs',
   tutorial: 'penalty.tutorial',
+  total: 'penalty.total',
+  shooter: 'penalty.shooter',
 };
 const LIVES = 3;
 const HISTORY_MAX = 80;
@@ -64,7 +68,7 @@ export function rankFor(goals: number): string {
   return name;
 }
 
-type Phase = 'intro' | 'aim' | 'flight' | 'result' | 'over';
+type Phase = 'select' | 'intro' | 'aim' | 'flight' | 'result' | 'over';
 
 interface Particle {
   x: number;
@@ -93,6 +97,12 @@ class Penalty implements Game {
   private runs = 0;
   private history: Zone[] = [];
   private tutorialSeen = false;
+  /** 累计进球（解锁球员用） */
+  private totalGoals = 0;
+  /** 选中的球员；trial 是看广告试用、只用这一局的 */
+  private shooterIdx = 0;
+  private trialIdx: number | null = null;
+  private unlockedThisRun: string[] = [];
 
   // 这一局
   private phase: Phase = 'intro';
@@ -119,8 +129,7 @@ class Penalty implements Game {
 
   // 手指
   private dragging = false;
-  private dragStart = 0;
-  private dragPoints: { x: number; y: number }[] = [];
+  private dragPoints: { x: number; y: number; t: number }[] = [];
 
   // 表现
   private banner: { text: string; sub: string; color: string; t: number } | null = null;
@@ -135,6 +144,8 @@ class Penalty implements Game {
   private keeperHead = { x: 0, y: 0 };
   private overlayButtons: Btn[] = [];
   private soundBtn: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  private selectRows: Rect[] = [];
+  private speedText: { text: string; t: number } | null = null;
 
   constructor(host: Host) {
     this.host = host;
@@ -145,8 +156,12 @@ class Penalty implements Game {
       .map(Number)
       .filter((z) => Number.isInteger(z) && z >= 0 && z <= 5) as Zone[];
     this.tutorialSeen = host.save.get(KEY.tutorial) === '1';
+    this.totalGoals = Number(host.save.get(KEY.total) ?? '0') || 0;
+    const saved = SHOOTERS.findIndex((x) => x.id === host.save.get(KEY.shooter));
+    this.shooterIdx = saved >= 0 && isUnlocked(SHOOTERS[saved]!, this.totalGoals) ? saved : 0;
     this.rng = new Rng(mix32(this.runs * 7919 + 17));
     this.startRun();
+    this.openSelect();
   }
 
   // ---------- 一局 ----------
@@ -155,7 +170,12 @@ class Penalty implements Game {
     return PERSONAS[this.keeperIdx]!;
   }
 
+  private get shooter(): Shooter {
+    return SHOOTERS[this.trialIdx ?? this.shooterIdx]!;
+  }
+
   private startRun(): void {
+    this.trialIdx = null;
     this.goals = 0;
     this.lives = LIVES;
     this.streak = 0;
@@ -166,9 +186,34 @@ class Penalty implements Game {
     this.newBest = false;
     this.shotsThisRun = 0;
     this.firstIntro = true;
+    this.unlockedThisRun = [];
     this.rng = new Rng(mix32(this.runs * 7919 + 17));
     this.prepareShot();
     this.setPhase('intro');
+  }
+
+  /** 选球员的画面。 */
+  private openSelect(): void {
+    this.trialIdx = null;
+    this.setPhase('select');
+  }
+
+  private pickShooter(i: number): void {
+    const s = SHOOTERS[i]!;
+    if (!isUnlocked(s, this.totalGoals)) {
+      this.say(`累计进 ${s.unlockAt} 个球解锁，还差 ${s.unlockAt - this.totalGoals} 个`);
+      return;
+    }
+    this.shooterIdx = i;
+    this.host.save.set(KEY.shooter, s.id);
+  }
+
+  private tryShooter(i: number): void {
+    void this.host.showRewardedAd('try-shooter').then((ok) => {
+      if (!ok) return this.say('广告没看完，没有奖励');
+      this.startRun();
+      this.trialIdx = i;
+    });
   }
 
   private prepareShot(): void {
@@ -204,8 +249,8 @@ class Penalty implements Game {
 
   // ---------- 操作 ----------
 
-  pointerDown(x: number, y: number): void {
-    if (inRect(this.soundBtn, x, y, 8)) {
+  pointerDown(x: number, y: number, t?: number): void {
+    if (this.phase !== 'select' && inRect(this.soundBtn, x, y, 8)) {
       this.host.sound.setEnabled(!this.host.sound.enabled);
       this.host.sound.play('click');
       return;
@@ -221,6 +266,22 @@ class Penalty implements Game {
       this.setPhase('aim');
       return;
     }
+    if (this.phase === 'select') {
+      for (const b of this.overlayButtons) {
+        if (inRect(b, x, y, 4)) {
+          this.host.sound.play('click');
+          b.onTap();
+          return;
+        }
+      }
+      this.selectRows.forEach((r, i) => {
+        if (inRect(r, x, y)) {
+          this.host.sound.play('click');
+          this.pickShooter(i);
+        }
+      });
+      return;
+    }
     if (this.phase === 'over') {
       if (this.phaseT < 0.6) return;
       for (const b of this.overlayButtons) {
@@ -234,22 +295,21 @@ class Penalty implements Game {
     }
     if (this.phase !== 'aim') return;
     this.dragging = true;
-    this.dragStart = this.time;
-    this.dragPoints = [{ x, y }];
+    this.dragPoints = [{ x, y, t: t ?? this.time }];
   }
 
-  pointerMove(x: number, y: number): void {
+  pointerMove(x: number, y: number, t?: number): void {
     if (!this.dragging) return;
-    this.dragPoints.push({ x, y });
-    if (this.dragPoints.length > 64) this.dragPoints.splice(1, 1);
+    this.dragPoints.push({ x, y, t: t ?? this.time });
+    if (this.dragPoints.length > 160) this.dragPoints.splice(1, 1);
   }
 
-  pointerUp(x: number, y: number): void {
+  pointerUp(x: number, y: number, t?: number): void {
     if (!this.dragging) return;
     this.dragging = false;
-    this.dragPoints.push({ x, y });
+    this.dragPoints.push({ x, y, t: t ?? this.time });
     if (this.phase !== 'aim') return;
-    const shot = shotFromSwipe(this.cam, this.ballScreen(), { points: this.dragPoints, duration: this.time - this.dragStart }, this.rng);
+    const shot = shotFromSwipe(this.cam, this.ballScreen(), { points: this.dragPoints }, this.rng, this.shooter);
     if (shot === 'short') return this.say('往球门的方向划长一点');
     if (shot === 'down') return this.say('往球门的方向划');
     this.kick(shot);
@@ -266,8 +326,10 @@ class Penalty implements Game {
     this.history.push(shot.zone);
     if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
     this.host.save.set(KEY.history, this.history.join(''));
-    this.host.sound.play('kick');
-    this.host.vibrate('light');
+    this.host.sound.play('kick', shot.power);
+    this.host.vibrate(shot.power > 0.7 ? 'heavy' : 'light');
+    if (shot.power > 0.75) this.shake = 4;
+    this.speedText = { text: `球速 ${ballSpeedKmh(shot)} 公里/时${Math.abs(shot.bend) > 0.4 ? ' · 弧线球' : ''}`, t: 0 };
     const b = this.ballScreen();
     for (let i = 0; i < 10; i++) {
       this.particles.push({
@@ -294,6 +356,7 @@ class Penalty implements Game {
     this.time += dt;
     this.phaseT += dt;
     if (this.toast && (this.toast.t += dt) > 1.8) this.toast = null;
+    if (this.speedText && (this.speedText.t += dt) > 1.6) this.speedText = null;
     if (this.bubble && (this.bubble.t += dt) > 2.4) this.bubble = null;
     if (this.banner) this.banner.t += dt;
     this.shake = Math.max(0, this.shake - dt * 30);
@@ -338,6 +401,9 @@ class Penalty implements Game {
     if (isGoal(outcome)) {
       this.goals++;
       this.streak++;
+      this.totalGoals++;
+      this.host.save.set(KEY.total, String(this.totalGoals));
+      for (const s of SHOOTERS) if (s.unlockAt === this.totalGoals && s.unlockAt > 0) this.unlockedThisRun.push(s.name);
       this.excite = 1;
       this.shake = 9;
       this.ripple = { x: shot.tx, y: Math.min(shot.ty, 1.8), t: 0 };
@@ -477,15 +543,121 @@ class Penalty implements Game {
       const a = Math.min(1, this.bubble.t / 0.15, (2.4 - this.bubble.t) / 0.3);
       D.drawBubble(ctx, this.view, this.keeperHead.x, this.keeperHead.y - 4, this.bubble.text, this.persona, this.bubble.face, Math.max(0, a));
     }
-    this.drawToast(ctx);
+    this.drawSpeed(ctx);
     if (this.phase === 'intro') this.drawIntro(ctx);
     if (this.phase === 'over') this.drawOver(ctx);
+    if (this.phase === 'select') this.drawSelect(ctx);
+    this.drawToast(ctx);
+  }
+
+  private drawSpeed(ctx: Canvas2D): void {
+    if (!this.speedText || this.phase === 'select' || this.phase === 'over') return;
+    const ball = this.ballScreen();
+    const a = Math.min(1, (1.6 - this.speedText.t) / 0.3, this.speedText.t / 0.08);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 16px ${D.FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(this.speedText.text, this.view.width / 2, ball.y + 50);
+    ctx.restore();
+  }
+
+  /** 选球员：每人一行，头像、名字、一句话、三项能力；没解锁的灰着，可以看广告试用一局。 */
+  private drawSelect(ctx: Canvas2D): void {
+    const { width: W, height: H, safeTop, safeBottom } = this.view;
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,8,24,0.86)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `900 24px ${D.FONT}`;
+    ctx.fillText('选一个罚球的人', W / 2, safeTop + 44);
+    ctx.font = `600 13px ${D.FONT}`;
+    ctx.fillStyle = D.PAL.hudMuted;
+    ctx.fillText(`累计进球 ${this.totalGoals} 个`, W / 2, safeTop + 72);
+    const top = safeTop + 96;
+    const bottom = H - safeBottom - 96;
+    const n = SHOOTERS.length;
+    const rowH = Math.min(92, (bottom - top) / n - 8);
+    const x = 16;
+    const w = W - 32;
+    this.selectRows = [];
+    this.overlayButtons = [];
+    SHOOTERS.forEach((sh, i) => {
+      const y = top + i * (rowH + 8);
+      const r = { x, y, w, h: rowH };
+      this.selectRows.push(r);
+      const unlocked = isUnlocked(sh, this.totalGoals);
+      const selected = i === this.shooterIdx;
+      roundRectPath(ctx, x, y, w, rowH, 16);
+      ctx.fillStyle = selected ? D.PAL.card : unlocked ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.35)';
+      ctx.fill();
+      if (selected) {
+        ctx.strokeStyle = D.PAL.accent;
+        ctx.lineWidth = 4;
+        ctx.stroke();
+      }
+      const av = Math.min(30, rowH * 0.34);
+      ctx.save();
+      if (!unlocked) ctx.globalAlpha = 0.5;
+      D.drawAvatar(ctx, x + 14 + av, y + rowH / 2, av, sh, selected ? 'smug' : 'ready', String(10 + i));
+      ctx.restore();
+      const tx = x + 24 + av * 2;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = D.PAL.cardInk;
+      ctx.font = `900 17px ${D.FONT}`;
+      ctx.fillText(sh.name, tx, y + rowH * 0.27);
+      ctx.font = `500 12px ${D.FONT}`;
+      ctx.fillStyle = D.PAL.cardMuted;
+      ctx.fillText(unlocked ? sh.motto : `累计进 ${sh.unlockAt} 个解锁（还差 ${sh.unlockAt - this.totalGoals}）`, tx, y + rowH * 0.5);
+      // 三项能力
+      const stats: [string, number][] = [
+        ['力量', sh.power],
+        ['精准', sh.accuracy],
+        ['弧线', sh.curve],
+      ];
+      const sw = Math.min(78, (w - (tx - x) - 12) / 3);
+      stats.forEach(([label, v], k) => {
+        const sx = tx + k * sw;
+        const sy = y + rowH * 0.77;
+        ctx.fillStyle = D.PAL.cardMuted;
+        ctx.font = `700 11px ${D.FONT}`;
+        ctx.fillText(label, sx, sy);
+        for (let j = 0; j < 5; j++) {
+          ctx.fillStyle = j < v ? '#e0a21a' : 'rgba(0,0,0,0.12)';
+          ctx.fillRect(sx + 27 + j * 8, sy - 4, 6, 8);
+        }
+      });
+      if (!unlocked) {
+        const bw = 88;
+        const btn: Btn = { x: x + w - bw - 10, y: y + 8, w: bw, h: 30, label: '试用一局', ad: true, onTap: () => this.tryShooter(i) };
+        this.overlayButtons.push(btn);
+        D.drawPill(ctx, btn);
+      }
+    });
+    const start: Btn = {
+      x: 24,
+      y: H - safeBottom - 76,
+      w: W - 48,
+      h: 54,
+      label: `用「${SHOOTERS[this.shooterIdx]!.name}」开始`,
+      primary: true,
+      onTap: () => {
+        this.startRun();
+        this.trialIdx = null;
+      },
+    };
+    this.overlayButtons.push(start);
+    D.drawPill(ctx, start);
+    ctx.restore();
   }
 
   /** 球现在在哪（包括进网、被扑出去、飞出去以后）。 */
   private ballState(): { x: number; y: number; z: number; alpha: number; spin: number } {
     const shot = this.shot;
-    if (!shot || this.phase === 'aim' || this.phase === 'intro') return { x: 0, y: BALL_R, z: SPOT_Z, alpha: 1, spin: 0 };
+    if (!shot || this.phase === 'aim' || this.phase === 'intro' || this.phase === 'select') return { x: 0, y: BALL_R, z: SPOT_Z, alpha: 1, spin: 0 };
     const spin = this.flightT * (8 + shot.power * 14);
     if (this.phase === 'flight') return { ...ballAt(shot, this.flightT), alpha: 1, spin };
     const t = this.afterT;
@@ -594,23 +766,40 @@ class Penalty implements Game {
       ctx.lineTo(pts[i]!.x, pts[i]!.y);
       ctx.stroke();
     }
-    // 瞄准圈：把这一划平移到球上，看看会踢到哪
-    const a = pts[0]!;
-    const b = pts[pts.length - 1]!;
-    const ball = this.ballScreen();
-    const goalLine = project(this.cam, 0, 0, 0).y;
-    const dy = b.y - a.y;
-    if (dy < -10) {
-      const lift = -dy / (ball.y - goalLine);
-      const tx = lift >= 1 ? ball.x + (b.x - a.x) : ball.x + (b.x - a.x) / lift;
-      const ty = lift >= 1 ? ball.y + dy : goalLine - 6;
-      const speed = Math.hypot(b.x - a.x, dy) / (ball.y - goalLine) / Math.max(0.03, this.time - this.dragStart);
-      const power = Math.min(1, Math.max(0, (speed - 2.2) / 4.8));
-      ctx.strokeStyle = power > 0.7 ? 'rgba(255,107,91,0.9)' : power > 0.35 ? 'rgba(255,207,63,0.9)' : 'rgba(140,230,150,0.9)';
+    // 预览：要是现在松手，球会怎么飞（虚线）、落在哪（圈）、多大力（球下面的条）
+    const preview = shotFromSwipe(this.cam, this.ballScreen(), { points: pts }, new Rng(1), this.shooter);
+    if (typeof preview !== 'string') {
+      const shot = { ...preview, tx: preview.aimX, ty: preview.aimY };
+      const color = shot.power > 0.7 ? '255,107,91' : shot.power > 0.35 ? '255,207,63' : '140,230,150';
+      for (let i = 1; i <= 16; i++) {
+        const q = ballAt(shot, (shot.time * i) / 16);
+        const sp = project(this.cam, q.x, q.y, q.z);
+        ctx.fillStyle = `rgba(${color},${0.25 + (i / 16) * 0.5})`;
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 2 + (i / 16) * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const end = project(this.cam, shot.tx, shot.ty, 0);
+      ctx.strokeStyle = `rgba(${color},0.95)`;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(tx, ty, 9 + power * 10, 0, Math.PI * 2);
+      ctx.arc(end.x, end.y, 8 + shot.power * 10, 0, Math.PI * 2);
       ctx.stroke();
+      // 力量条
+      const ball = this.ballScreen();
+      const bw = 120;
+      const bx = ball.x - bw / 2;
+      const by = ball.y + 34;
+      roundRectPath(ctx, bx, by, bw, 10, 5);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fill();
+      roundRectPath(ctx, bx, by, Math.max(10, bw * shot.power), 10, 5);
+      ctx.fillStyle = `rgb(${color})`;
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = `700 12px ${D.FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(shot.power > 0.7 ? '大力' : shot.power > 0.35 ? '中等' : '轻推', ball.x, by + 26);
     }
     ctx.restore();
   }
@@ -631,7 +820,7 @@ class Penalty implements Game {
     ctx.fillStyle = D.PAL.hud;
     ctx.font = `700 15px ${D.FONT}`;
     ctx.textAlign = 'center';
-    ctx.fillText('往想踢的位置划一下', this.view.width / 2, ball.y + 104);
+    ctx.fillText('往想踢的位置划；画个弯就是弧线球', this.view.width / 2, ball.y + 104);
     ctx.restore();
   }
 
@@ -690,6 +879,17 @@ class Penalty implements Game {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, W / 2, ly + 12.5);
+    // 左下：罚球的人
+    const sh = this.shooter;
+    const by = this.view.height - this.view.safeBottom - 30;
+    D.drawAvatar(ctx, 34, by, 18, sh, 'ready', String(10 + SHOOTERS.indexOf(sh)));
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 14px ${D.FONT}`;
+    ctx.fillText(this.trialIdx !== null ? `${sh.name}（试用）` : sh.name, 60, by - 8);
+    ctx.fillStyle = D.PAL.hudMuted;
+    ctx.font = `600 11px ${D.FONT}`;
+    ctx.fillText(`力量 ${sh.power} · 精准 ${sh.accuracy} · 弧线 ${sh.curve}`, 60, by + 10);
     ctx.restore();
     this.drawNotebook(ctx, top);
   }
@@ -817,7 +1017,7 @@ class Penalty implements Game {
     const p = this.persona;
     const tutorial = this.firstIntro && this.goals === 0 && !this.tutorialSeen;
     ctx.save();
-    const c = this.card(ctx, tutorial ? 430 : 330);
+    const c = this.card(ctx, tutorial ? 452 : 330);
     const cx = c.x + c.w / 2;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -842,7 +1042,8 @@ class Penalty implements Game {
       ctx.fillStyle = D.PAL.cardInk;
       const lines = [
         '往想踢的位置划一下就射门。',
-        '划得越快球越快，但也越容易偏。',
+        '先往一边划再拐过来，就是弧线球。',
+        '松手那一下越快，球越快，也越容易偏。',
         '3 次机会：被扑出或踢偏就少一次。',
         '门将会记住你往哪儿踢。',
       ];
@@ -859,7 +1060,7 @@ class Penalty implements Game {
 
   private drawOver(ctx: Canvas2D): void {
     ctx.save();
-    const c = this.card(ctx, 430);
+    const c = this.card(ctx, this.unlockedThisRun.length > 0 ? 512 : 486);
     const cx = c.x + c.w / 2;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -880,6 +1081,7 @@ class Penalty implements Game {
       ['你最爱踢', fav ? `${ZONE_NAMES[fav.zone]}（${Math.round(fav.share * 100)}%）` : '—'],
       ['下一个门将', this.nextKeeperText()],
     ];
+    if (this.unlockedThisRun.length > 0) rows.push(['解锁了新球员', this.unlockedThisRun.join('、')]);
     ctx.font = `600 15px ${D.FONT}`;
     rows.forEach(([k, v], i) => {
       const y = c.y + 168 + i * 30;
@@ -893,9 +1095,10 @@ class Penalty implements Game {
     this.overlayButtons = [];
     const bw = c.w - 56;
     if (!this.revived) {
-      this.overlayButtons.push({ x: c.x + 28, y: c.y + c.h - 128, w: bw, h: 48, label: '再给一次机会', ad: true, onTap: () => this.revive() });
+      this.overlayButtons.push({ x: c.x + 28, y: c.y + c.h - 176, w: bw, h: 46, label: '再给一次机会', ad: true, onTap: () => this.revive() });
     }
-    this.overlayButtons.push({ x: c.x + 28, y: c.y + c.h - 68, w: bw, h: 50, label: '再来一局', primary: true, onTap: () => this.startRun() });
+    this.overlayButtons.push({ x: c.x + 28, y: c.y + c.h - 120, w: bw, h: 50, label: '再来一局', primary: true, onTap: () => this.startRun() });
+    this.overlayButtons.push({ x: c.x + 28, y: c.y + c.h - 60, w: bw, h: 42, label: '换个球员', onTap: () => this.openSelect() });
     for (const b of this.overlayButtons) D.drawPill(ctx, b);
     ctx.restore();
   }

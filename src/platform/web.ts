@@ -118,9 +118,9 @@ export function runInBrowser(create: (host: Host) => Game): void {
   resize();
   window.addEventListener('resize', resize);
 
-  const local = (e: PointerEvent): [number, number] => {
+  const local = (e: PointerEvent): [number, number, number] => {
     const r = canvas.getBoundingClientRect();
-    return [e.clientX - r.left, e.clientY - r.top];
+    return [e.clientX - r.left, e.clientY - r.top, e.timeStamp / 1000];
   };
   let activePointer: number | null = null;
   canvas.addEventListener('pointerdown', (e) => {

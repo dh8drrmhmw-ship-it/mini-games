@@ -55,7 +55,7 @@ function tone(ctx: Ctx, out: AudioNode, t0: number, opts: { type: OscillatorType
   o.stop(t0 + opts.attack + opts.decay + 0.05);
 }
 
-const RECIPES: Record<SoundName, (ctx: Ctx, out: AudioNode, t: number) => void> = {
+const RECIPES: Record<SoundName, (ctx: Ctx, out: AudioNode, t: number, k: number) => void> = {
   // 裁判哨：两声短哨，带一点颤音
   whistle(ctx, out, t) {
     for (const [start, dur] of [
@@ -84,9 +84,10 @@ const RECIPES: Record<SoundName, (ctx: Ctx, out: AudioNode, t: number) => void> 
     }
   },
   // 踢球：低沉的「嘭」加一点皮面的脆响
-  kick(ctx, out, t) {
-    tone(ctx, out, t, { type: 'sine', freq: 170, freqEnd: 48, attack: 0.004, peak: 0.9, decay: 0.16 });
-    noiseBurst(ctx, out, t, { type: 'highpass', freq: 2500, attack: 0.002, peak: 0.35, decay: 0.04 });
+  // k 越大（踢得越用力）越响、越低沉
+  kick(ctx, out, t, k) {
+    tone(ctx, out, t, { type: 'sine', freq: 190 - 60 * k, freqEnd: 45, attack: 0.004, peak: 0.45 + 0.55 * k, decay: 0.12 + 0.1 * k });
+    noiseBurst(ctx, out, t, { type: 'highpass', freq: 2200, attack: 0.002, peak: 0.2 + 0.3 * k, decay: 0.03 + 0.03 * k });
   },
   // 进网：网子「唰」一下
   net(ctx, out, t) {
@@ -159,18 +160,31 @@ export function createWebSound(initiallyOn: boolean, persist: (on: boolean) => v
     setEnabled(on: boolean) {
       enabled = on;
       persist(on);
+      try {
+        const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+        if (session) session.type = on ? 'playback' : 'auto';
+      } catch {
+        // 忽略
+      }
     },
     unlock() {
+      // 苹果手机：静音键开着时也出声（游戏里有自己的声音开关）。不支持这个接口的浏览器就算了。
+      try {
+        const session = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+        if (session && enabled) session.type = 'playback';
+      } catch {
+        // 忽略
+      }
       const c = ensure();
       if (c && c.state === 'suspended') void c.resume();
     },
-    play(name: SoundName) {
+    play(name: SoundName, strength = 0.5) {
       if (!enabled) return;
       const c = ensure();
       if (!c || !master) return;
       if (c.state === 'suspended') void c.resume();
       try {
-        RECIPES[name](c, master, c.currentTime + 0.01);
+        RECIPES[name](c, master, c.currentTime + 0.01, Math.min(1, Math.max(0, strength)));
       } catch {
         // 个别浏览器不支持某个节点，没声音就算了
       }

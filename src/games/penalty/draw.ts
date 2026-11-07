@@ -292,6 +292,14 @@ export function drawBall(ctx: Canvas2D, cam: Camera, x: number, y: number, z: nu
 
 export type Face = 'ready' | 'smug' | 'shock' | 'sad';
 
+/** 画头像要的长相：门将和罚球的球员都有这几项。 */
+export interface Look {
+  jersey: string;
+  jerseyDark: string;
+  skin: string;
+  hair: string;
+}
+
 export type KeeperPose =
   | { kind: 'idle'; x: number; lean: number; bounce: number }
   | { kind: 'line'; fx: number; fy: number; hx: number; hy: number };
@@ -375,7 +383,7 @@ export function drawKeeper(ctx: Canvas2D, cam: Camera, p: Persona, pose: KeeperP
 }
 
 /** 脸：发型、眼睛、嘴，按表情画。头像和球场上的门将共用。 */
-export function drawFace(ctx: Canvas2D, x: number, y: number, r: number, p: Persona, face: Face): void {
+export function drawFace(ctx: Canvas2D, x: number, y: number, r: number, p: Look, face: Face): void {
   ctx.save();
   ctx.fillStyle = p.skin;
   ctx.beginPath();
@@ -439,7 +447,7 @@ export function drawFace(ctx: Canvas2D, x: number, y: number, r: number, p: Pers
 }
 
 /** 头像：圆形底 + 肩膀 + 脸（气泡和换门将的卡片用）。 */
-export function drawAvatar(ctx: Canvas2D, x: number, y: number, r: number, p: Persona, face: Face): void {
+export function drawAvatar(ctx: Canvas2D, x: number, y: number, r: number, p: Look, face: Face, num = '1'): void {
   ctx.save();
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -453,7 +461,7 @@ export function drawAvatar(ctx: Canvas2D, x: number, y: number, r: number, p: Pe
   ctx.font = `800 ${Math.round(r * 0.42)}px ${FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('1', x, y + r * 0.78);
+  ctx.fillText(num, x, y + r * 0.78);
   drawFace(ctx, x, y - r * 0.08, r * 0.55, p, face);
   ctx.restore();
 }

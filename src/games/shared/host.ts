@@ -32,7 +32,8 @@ export type SoundName =
   | 'milestone';
 
 export interface Sound {
-  play(name: SoundName): void;
+  /** strength：0～1，比如踢得越用力声音越响（不传就是普通大小） */
+  play(name: SoundName, strength?: number): void;
   readonly enabled: boolean;
   setEnabled(on: boolean): void;
 }
@@ -56,8 +57,9 @@ export interface Game {
   /** dt：距离上一帧过了几秒。 */
   update(dt: number): void;
   render(ctx: Canvas2D): void;
-  pointerDown(x: number, y: number): void;
+  /** t：事件发生的时间（秒，只用来算两次事件之间隔了多久） */
+  pointerDown(x: number, y: number, t?: number): void;
   /** 手指按住移动、松开（要划手指的游戏才用）。 */
-  pointerMove?(x: number, y: number): void;
-  pointerUp?(x: number, y: number): void;
+  pointerMove?(x: number, y: number, t?: number): void;
+  pointerUp?(x: number, y: number, t?: number): void;
 }

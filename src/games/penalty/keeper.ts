@@ -307,7 +307,9 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot): 
   let handY = target.y;
   const col = zoneCol(guess);
   const sameSide = col === 1 || Math.sign(shot.tx) === Math.sign(target.x);
-  const adjust = p.adjust * Math.min(1.6, shot.time / 0.6) + (col === 1 ? 0.35 : 0);
+  // 球越慢，门将越来得及调整；弧线球一开始的方向会骗人，调整得少
+  const curveTrick = Math.max(0.35, 1 - Math.abs(shot.bend) * 0.4);
+  const adjust = (p.adjust * Math.min(1.6, shot.time / 0.6) + (col === 1 ? 0.35 : 0)) * curveTrick;
   if (sameSide) {
     const ddx = shot.tx - handX;
     const ddy = shot.ty - handY;
