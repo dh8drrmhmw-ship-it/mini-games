@@ -11,7 +11,7 @@
  */
 import { Rng } from '../src/games/shared/rng.ts';
 import { chooseGuess, chooseTell, chooseWait, freqModel, GOALS_TO_CLEAR, isGoal, LIVES, PERSONAS, resolveShot, type Persona } from '../src/games/penalty/keeper.ts';
-import { gauss, GOAL_H, HALF_W, SHOT_TIME_SLOW, zoneCol, zoneOf, zoneRow, ZONES, type Shot, type Zone } from '../src/games/penalty/world.ts';
+import { gauss, SHOT_TIME_SLOW, shotSpread, zoneCol, zoneOf, zoneRow, ZONES, type Shot, type Zone } from '../src/games/penalty/world.ts';
 
 export type Strategy = 'random' | 'human' | 'repeat' | 'anti' | 'skilled';
 
@@ -80,8 +80,7 @@ export function makeShot(zone: Zone, rng: Rng, skilled = false, wind = 0): Shot 
   ax -= drift * (skilled ? 0.7 : 0.3);
   const aimX = ax + gauss(rng) * noise;
   const aimY = Math.max(0.12, ay + gauss(rng) * noise * 0.8);
-  const corner = 1 + 0.35 * Math.min(1, Math.abs(aimX) / HALF_W) ** 2 + 0.3 * Math.min(1, aimY / GOAL_H) ** 2;
-  const sd = (0.05 + 0.3 * power * power) * 1.05 * corner;
+  const sd = shotSpread(aimX, aimY, power, 3.25);
   return {
     aimX,
     aimY,
@@ -108,7 +107,9 @@ function oneShot(p: Persona, strategy: Strategy, history: Zone[], rng: Rng): Ret
   const shot = makeShot(zone, rng, strategy === 'skilled', wind);
   history.push(shot.zone);
   if (history.length > 60) history.shift();
-  return resolveShot(p, guess, lean, shot, { waiting });
+  // 门将从你划手指的动作就开始看方向：高手划得快（约 0.15 秒），普通玩家慢一些
+  const read = strategy === 'skilled' ? 0.09 : 0.15;
+  return resolveShot(p, guess, lean, shot, { waiting, read });
 }
 
 export function successRate(p: Persona, strategy: Strategy, shots: number, seed: number): { goal: number; save: number; miss: number } {

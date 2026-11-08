@@ -170,7 +170,9 @@ class Penalty implements Game {
 
   // 手指
   readonly multiTouch = true;
-  private control: Control = 'pro';
+  private control: Control = 'simple';
+  /** 这一脚门将从你划手指的动作里提前看出了多少秒 */
+  private readTime = 0;
   private tutorialProSeen = false;
   // 进阶操作
   private aim: Aim = { dir: 0, elev: 0.3 };
@@ -221,7 +223,7 @@ class Penalty implements Game {
       .filter((z) => Number.isInteger(z) && z >= 0 && z <= 5) as Zone[];
     this.tutorialSeen = host.save.get(KEY.tutorial) === '1';
     this.tutorialProSeen = host.save.get(KEY.tutorialPro) === '1';
-    this.control = host.save.get(KEY.control) === 'simple' ? 'simple' : 'pro';
+    this.control = host.save.get(KEY.control) === 'pro' ? 'pro' : 'simple';
     try {
       const st = JSON.parse(host.save.get(KEY.stars) ?? '[]') as unknown;
       this.stars = Array.isArray(st) ? st.map((x) => Number(x) || 0) : [];
@@ -424,6 +426,10 @@ class Penalty implements Game {
     if (shot === 'short') return this.say('往球门的方向划长一点');
     if (shot === 'down') return this.say('往球门的方向划');
     if (this.shooter.skill === 'cannon' && shot.power >= 0.75) shot.time *= 0.88;
+    // 划得越久，等球的门将越早看出你要往哪踢
+    const first = this.dragPoints[0]!;
+    const last = this.dragPoints[this.dragPoints.length - 1]!;
+    this.readTime = Math.min(0.2, Math.max(0, last.t - first.t) * 0.6);
     this.pending = shot;
     this.bubble = null;
     this.setPhase('kick');
@@ -503,6 +509,7 @@ class Penalty implements Game {
       lucky: sh.skill === 'lucky',
       waiting: this.waiting,
       headStart: this.headStart,
+      read: this.control === 'simple' ? this.readTime : 0,
     });
     this.flightT = 0;
     this.afterT = 0;
@@ -1200,9 +1207,9 @@ class Penalty implements Game {
     if (typeof preview !== 'string') {
       const shot = { ...preview, tx: preview.aimX, ty: preview.aimY };
       const color = shot.power > 0.7 ? '255,107,91' : shot.power > 0.35 ? '255,207,63' : '140,230,150';
-      // 前两关是练习：整条路线和落点都画出来；之后只画开头一小段，落点要靠自己
-      const full = this.stage < 2;
-      for (let i = 1; i <= (full ? 16 : 6); i++) {
+      // 第一关是练习：整条路线和落点都画出来；之后什么都不画，全靠自己
+      const full = this.stage < 1;
+      for (let i = 1; i <= (full ? 16 : 0); i++) {
         const q = ballAt(shot, (shot.time * i) / 16);
         const sp = project(this.cam, q.x, q.y, q.z);
         ctx.fillStyle = `rgba(${color},${0.25 + (i / 16) * 0.5})`;

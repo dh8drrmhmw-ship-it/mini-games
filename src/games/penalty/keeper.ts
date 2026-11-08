@@ -372,6 +372,8 @@ export interface ShotOptions {
   waiting?: boolean;
   /** 门将在球踢出去之前多少秒就扑出去了（进阶操作里，助跑时门将可能提前扑） */
   headStart?: number;
+  /** 等球的门将从你划手指的动作里提前看出方向的时间（秒）：划得越犹豫，他越早看出来 */
+  read?: number;
 }
 
 export interface Resolution {
@@ -414,7 +416,7 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, o
   const startX = lean * 0.25;
   // 等球：看清方向再扑，所以起步更晚；扑向他看到的方向（弧线球一开始的方向会骗他），最远扑到 range
   if (opts.waiting) {
-    const late = (opts.late ?? 0) + 0.1;
+    const late = (opts.late ?? 0) + 0.1 - Math.min(0.2, opts.read ?? 0);
     const seen = shot.tx + shot.bend * 1.4 * (opts.curveTrick ?? 1);
     const handX = Math.max(-p.range, Math.min(p.range, seen));
     const handY = Math.min(2.25 + (p.height - 1.88), Math.max(0.3, shot.ty));

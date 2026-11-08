@@ -306,8 +306,8 @@ describe('点球：平衡（模拟玩家）', () => {
     expect(rates[9]).toBeLessThan(rates[0]! - 0.3);
   });
 
-  it('高手：第一关几乎都能过，最后一关大约两成', () => {
-    expect(passRate(PERSONAS[0]!, 'skilled', 800, 11)).toBeGreaterThan(0.85);
+  it('高手：第一关大多能过，最后一关一到两成', () => {
+    expect(passRate(PERSONAS[0]!, 'skilled', 800, 11)).toBeGreaterThan(0.78);
     const last = passRate(PERSONAS[9]!, 'skilled', 800, 11);
     expect(last).toBeGreaterThan(0.1);
     expect(last).toBeLessThan(0.35);

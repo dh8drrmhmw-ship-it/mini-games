@@ -208,9 +208,7 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   }
 
   // 脚下的偏差：越用力越不准，弧线越大越不准，球员越准偏得越少
-  // 越往死角瞄越难踢准：离中间越远、越高，偏差越大
-  const corner = 1 + 0.35 * Math.min(1, Math.abs(aimX) / HALF_W) ** 2 + 0.3 * Math.min(1, aimY / GOAL_H) ** 2;
-  const sd = (0.05 + 0.3 * power * power) * (1.45 - 0.2 * (kicker.accuracy - 1)) * corner + Math.abs(bend) * (outside ? 0.25 : 0.06);
+  const sd = shotSpread(aimX, aimY, power, kicker.accuracy) + Math.abs(bend) * (outside ? 0.25 : 0.06);
   // 风：球飞得越久，被吹得越偏
   const drift = weak ? 0 : wind * time * 0.42;
   const tx = aimX + gauss(rng) * sd + drift;
@@ -262,9 +260,8 @@ export function shotFromAim(aim: Aim, power: number, curve: number, kicker: Kick
   if (kicker.chip && !weak && pw < 0.25 && Math.abs(aimX) < 1.4 && aimY >= 0.6) {
     return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power: pw, time: 1.0, bend: 0, weak, chip: true };
   }
-  const corner = 1 + 0.35 * Math.min(1, Math.abs(aimX) / HALF_W) ** 2 + 0.3 * Math.min(1, aimY / GOAL_H) ** 2;
   const sd =
-    (0.05 + 0.3 * pw * pw) * (1.45 - 0.2 * (kicker.accuracy - 1)) * corner +
+    shotSpread(aimX, aimY, pw, kicker.accuracy) +
     Math.abs(bend) * (outside ? 0.25 : 0.06) +
     reaim * 0.3 +
     Math.max(0, p - 1) * 0.6;
@@ -272,6 +269,15 @@ export function shotFromAim(aim: Aim, power: number, curve: number, kicker: Kick
   const tx = aimX + gauss(rng) * sd + drift;
   const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
   return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power: pw, time, bend, weak, drift };
+}
+
+/**
+ * 脚下的偏差（米，一个标准差）：越用力越不准，球员越准偏得越少；
+ * 越往死角（离中间越远、越高）越难踢准。
+ */
+export function shotSpread(aimX: number, aimY: number, power: number, accuracy: number): number {
+  const corner = 1 + 0.5 * Math.min(1, Math.abs(aimX) / HALF_W) ** 2 + 0.4 * Math.min(1, aimY / GOAL_H) ** 2;
+  return (0.06 + 0.34 * power * power) * (1.45 - 0.2 * (accuracy - 1)) * corner;
 }
 
 /** 球速（公里每小时），踢出去以后显示。 */
