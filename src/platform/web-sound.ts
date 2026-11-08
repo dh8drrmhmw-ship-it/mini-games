@@ -123,6 +123,10 @@ const RECIPES: Record<SoundName, (ctx: Ctx, out: AudioNode, t: number, k: number
   groan(ctx, out, t) {
     noiseBurst(ctx, out, t, { type: 'bandpass', freq: 650, freqEnd: 280, q: 1.4, attack: 0.15, peak: 0.4, decay: 1.0 });
   },
+  // 助跑的脚步：轻轻的「噗」
+  step(ctx, out, t, k) {
+    noiseBurst(ctx, out, t, { type: 'lowpass', freq: 500, attack: 0.004, peak: 0.12 + 0.12 * k, decay: 0.07 });
+  },
   click(ctx, out, t) {
     tone(ctx, out, t, { type: 'triangle', freq: 880, freqEnd: 660, attack: 0.002, peak: 0.25, decay: 0.06 });
   },

@@ -317,6 +317,20 @@ export function chooseGuess(p: Persona, history: readonly Zone[], rng: Rng): Zon
 }
 
 /** 射门前晃一下：-1 往左，1 往右，0 不晃。可能是真的，也可能是假动作。 */
+/**
+ * 进阶操作里，助跑的时候门将会不会先动：
+ * - early：提前扑向他猜的那边（你看见了就能改方向踢另一边）；
+ * - fake：先往反方向晃一步骗你，球踢出去时才扑向他猜的那边；
+ * - at：助跑到第几成时动（0～1）。
+ * 爱晃的门将常常提前扑；会做假动作的门将常常骗你。等球的门将不会先动。
+ */
+export function chooseCommit(p: Persona, rng: Rng): { early: boolean; fake: boolean; at: number } {
+  const r = rng.int(1000) / 1000;
+  const early = r < Math.min(0.75, p.tell + 0.15);
+  const fake = !early && r < Math.min(0.9, p.tell + 0.15 + p.fakeTell * 1.5);
+  return { early, fake, at: 0.4 + rng.int(1000) / 1000 * 0.35 };
+}
+
 /** 这一脚门将是猜，还是站着等球。 */
 export function chooseWait(p: Persona, rng: Rng): boolean {
   return rng.int(1000) < p.wait * 1000;
@@ -356,6 +370,8 @@ export interface ShotOptions {
   lucky?: boolean;
   /** 门将这一脚没猜，站着等球 */
   waiting?: boolean;
+  /** 门将在球踢出去之前多少秒就扑出去了（进阶操作里，助跑时门将可能提前扑） */
+  headStart?: number;
 }
 
 export interface Resolution {
@@ -412,9 +428,10 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, o
   let handY = target.y;
   const col = zoneCol(guess);
   const sameSide = col === 1 || Math.sign(shot.tx) === Math.sign(target.x);
-  // 球越慢，门将越来得及调整；弧线球一开始的方向会骗人，调整得少
+  // 球越慢，门将越来得及调整；弧线球一开始的方向会骗人，调整得少；提前扑出去的门将在空中改不了
   const curveTrick = Math.max(0.2, 1 - Math.abs(shot.bend) * 0.4 * (opts.curveTrick ?? 1));
-  const adjust = (p.adjust * Math.min(1.6, shot.time / 0.6) + (col === 1 ? 0.35 : 0)) * curveTrick;
+  const head = opts.headStart ?? 0;
+  const adjust = head > 0.12 ? 0 : (p.adjust * Math.min(1.6, shot.time / 0.6) + (col === 1 ? 0.35 : 0)) * curveTrick;
   if (sameSide) {
     const ddx = shot.tx - handX;
     const ddy = shot.ty - handY;
@@ -424,7 +441,8 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, o
     handY += ddy * k;
   }
   handY = Math.min(2.35 + (p.height - 1.88), Math.max(0.25, handY));
-  const progress = diveProgress(p, shot.time, late);
+  // 提前扑的门将：从他动的那一刻算起，已经扑了 head 秒
+  const progress = head > 0 ? diveProgress(p, shot.time + head + p.reaction) : diveProgress(p, shot.time, late);
   const dive: Dive = { startX, handX, handY, progressAtBall: progress };
   const res = judge(p, shot, dive, late, opts);
   if (shot.chip && res.outcome !== 'over' && res.outcome !== 'wide' && shot.ty < GOAL_H) {

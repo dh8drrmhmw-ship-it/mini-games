@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { passRate, successRate } from '../scripts/penalty-balance.ts';
 import { rankFor } from '../src/games/penalty/game.ts';
-import { chooseGuess, patternCallout, PERSONAS, predict, resolveShot, starsFor } from '../src/games/penalty/keeper.ts';
+import { chooseCommit, chooseGuess, patternCallout, PERSONAS, predict, resolveShot, starsFor } from '../src/games/penalty/keeper.ts';
 import { BOOTS, kickerFor, SHOOTERS, unlocksAt } from '../src/games/penalty/players.ts';
-import { ballAt, makeCamera, project, shotFromSwipe, zoneOf, type Kicker, type Shot, type Zone } from '../src/games/penalty/world.ts';
+import { aimPoint, ballAt, makeCamera, project, shotFromAim, shotFromSwipe, zoneOf, type Kicker, type Shot, type Zone } from '../src/games/penalty/world.ts';
 import { Rng } from '../src/games/shared/rng.ts';
 
 const cam = makeCamera(390, 150, 640);
@@ -148,6 +148,58 @@ describe('点球：手指划一下 → 射门', () => {
       return sum / 300;
     };
     expect(spread(as(6))).toBeLessThan(spread(as(1)) * 0.7);
+  });
+});
+
+describe('点球：进阶操作（瞄准 + 蓄力）', () => {
+  it('瞄准左右高低对应球门里的一点；蓄力越足球越快', () => {
+    expect(aimPoint({ dir: 0, elev: 0 }).x).toBe(0);
+    expect(aimPoint({ dir: 1, elev: 0.5 }).x).toBeGreaterThan(3.6);
+    const soft = shotFromAim({ dir: 0.6, elev: 0.3 }, 0.3, 0, normal, new Rng(1));
+    const hard = shotFromAim({ dir: 0.6, elev: 0.3 }, 1, 0, normal, new Rng(1));
+    expect(hard.time).toBeLessThan(soft.time);
+  });
+
+  it('蓄过头球往上飞；松手侧滑是弧线；助跑时改方向越多越容易偏', () => {
+    const ok = shotFromAim({ dir: 0, elev: 0.5 }, 1, 0, normal, new Rng(2));
+    const over = shotFromAim({ dir: 0, elev: 0.5 }, 1.3, 0, normal, new Rng(2));
+    expect(over.aimY).toBeGreaterThan(ok.aimY + 0.8);
+    expect(shotFromAim({ dir: 0.5, elev: 0.3 }, 0.8, 1, normal, new Rng(1)).bend).toBeGreaterThan(0.5);
+    const spread = (reaim: number): number => {
+      let sum = 0;
+      for (let seed = 1; seed <= 300; seed++) {
+        const sh = shotFromAim({ dir: 0.5, elev: 0.3 }, 0.6, 0, normal, new Rng(seed), 0, reaim);
+        sum += Math.abs(sh.tx - sh.aimX);
+      }
+      return sum / 300;
+    };
+    expect(spread(1.5)).toBeGreaterThan(spread(0) * 1.5);
+  });
+
+  it('门将提前扑出去：扑到他猜的那边，踢另一边一定进', () => {
+    const cat = PERSONAS.find((p) => p.id === 'cat')!;
+    // 他猜右下，提前 0.3 秒扑了；你改踢左下
+    expect(resolveShot(cat, 2, 0, shot(-2.6, 0.5, 0.6), { headStart: 0.3 }).outcome).toBe('goal');
+    // 你还是踢右下，他早就到了
+    expect(resolveShot(cat, 2, 0, shot(2.6, 0.5, 0.6), { headStart: 0.3 }).outcome).toBe('save');
+  });
+
+  it('爱晃的门将常提前扑，会骗人的常做假动作，都在助跑中途', () => {
+    const rookie = PERSONAS[0]!;
+    const mind = PERSONAS.find((p) => p.id === 'mind')!;
+    const count = (p: typeof rookie, key: 'early' | 'fake'): number => {
+      const rng = new Rng(5);
+      let n = 0;
+      for (let i = 0; i < 500; i++) {
+        const c = chooseCommit(p, rng);
+        expect(c.at).toBeGreaterThanOrEqual(0.4);
+        expect(c.at).toBeLessThanOrEqual(0.75);
+        if (c[key]) n++;
+      }
+      return n / 500;
+    };
+    expect(count(rookie, 'early')).toBeGreaterThan(count(mind, 'early'));
+    expect(count(mind, 'fake')).toBeGreaterThan(count(rookie, 'fake'));
   });
 });
 

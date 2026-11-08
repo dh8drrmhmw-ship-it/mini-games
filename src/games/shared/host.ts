@@ -29,6 +29,7 @@ export type SoundName =
   | 'cheer'
   | 'groan'
   | 'click'
+  | 'step'
   | 'milestone';
 
 export interface Sound {
@@ -57,9 +58,11 @@ export interface Game {
   /** dt：距离上一帧过了几秒。 */
   update(dt: number): void;
   render(ctx: Canvas2D): void;
-  /** t：事件发生的时间（秒，只用来算两次事件之间隔了多久） */
-  pointerDown(x: number, y: number, t?: number): void;
+  /** 要不要同时认好几根手指（比如左手瞄准、右手射门）。不写就只认第一根。 */
+  readonly multiTouch?: boolean;
+  /** t：事件发生的时间（秒，只用来算两次事件之间隔了多久）；id：第几根手指 */
+  pointerDown(x: number, y: number, t?: number, id?: number): void;
   /** 手指按住移动、松开（要划手指的游戏才用）。 */
-  pointerMove?(x: number, y: number, t?: number): void;
-  pointerUp?(x: number, y: number, t?: number): void;
+  pointerMove?(x: number, y: number, t?: number, id?: number): void;
+  pointerUp?(x: number, y: number, t?: number, id?: number): void;
 }

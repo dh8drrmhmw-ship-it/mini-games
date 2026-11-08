@@ -224,6 +224,56 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak, drift };
 }
 
+// ---------- 进阶操作：先瞄准，再蓄力 ----------
+
+/** 进阶操作的瞄准：dir 左右（-1 最左，1 最右），elev 高低（0 贴地，1 很高，超过横梁）。 */
+export interface Aim {
+  dir: number;
+  elev: number;
+}
+
+/** 瞄准对应球门平面上的哪一点（箭头指向这里，但不画出来）。 */
+export function aimPoint(a: Aim): { x: number; y: number } {
+  return { x: a.dir * (HALF_W + 0.5), y: 0.12 + a.elev * 2.75 };
+}
+
+/**
+ * 进阶操作的一脚：
+ * - power：蓄力条，0～1 是正常，超过 1 是蓄过头（球会往上飞），最多 1.3；
+ * - curve：松手时往旁边滑了多少（-1～1），决定弧线；
+ * - reaim：助跑途中改了多少方向（米），改得越多越难踢准。
+ */
+export function shotFromAim(aim: Aim, power: number, curve: number, kicker: Kicker, rng: Rng, wind = 0, reaim = 0): Shot {
+  const p = clamp(power, 0, 1.3);
+  const pw = Math.min(1, p);
+  const target = aimPoint(aim);
+  const aimX = target.x;
+  const aimY = target.y + Math.max(0, p - 1) * 3.5;
+  const weak = p < 0.12;
+  const fastest = 0.52 - 0.035 * (kicker.power - 1);
+  const time = weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - fastest) * pw;
+  let bend = 0;
+  let outside = false;
+  if (!weak && curve !== 0) {
+    outside = kicker.curveSide !== 0 && Math.sign(curve) !== kicker.curveSide;
+    const limit = (0.35 + 0.3 * (kicker.curve - 1)) * (outside ? 0.4 : 1);
+    bend = clamp(curve, -1, 1) * limit;
+  }
+  if (kicker.chip && !weak && pw < 0.25 && Math.abs(aimX) < 1.4 && aimY >= 0.6) {
+    return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power: pw, time: 1.0, bend: 0, weak, chip: true };
+  }
+  const corner = 1 + 0.35 * Math.min(1, Math.abs(aimX) / HALF_W) ** 2 + 0.3 * Math.min(1, aimY / GOAL_H) ** 2;
+  const sd =
+    (0.05 + 0.3 * pw * pw) * (1.45 - 0.2 * (kicker.accuracy - 1)) * corner +
+    Math.abs(bend) * (outside ? 0.25 : 0.06) +
+    reaim * 0.3 +
+    Math.max(0, p - 1) * 0.6;
+  const drift = weak ? 0 : wind * time * 0.42;
+  const tx = aimX + gauss(rng) * sd + drift;
+  const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
+  return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power: pw, time, bend, weak, drift };
+}
+
 /** 球速（公里每小时），踢出去以后显示。 */
 export function ballSpeedKmh(shot: Shot): number {
   const dist = Math.hypot(SPOT_Z, shot.tx, shot.ty) + Math.abs(shot.bend) * 0.3;

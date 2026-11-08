@@ -122,29 +122,30 @@ export function runInBrowser(create: (host: Host) => Game): void {
     const r = canvas.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top, e.timeStamp / 1000];
   };
-  let activePointer: number | null = null;
+  // 认哪些手指：一般只认第一根；游戏要多指（multiTouch）时每根都认
+  const active = new Set<number>();
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     sound.unlock();
-    if (activePointer !== null) return; // 只认第一根手指
-    activePointer = e.pointerId;
+    if (active.size > 0 && !game.multiTouch) return;
+    active.add(e.pointerId);
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch {
       // 不支持就算了
     }
-    game.pointerDown(...local(e));
+    game.pointerDown(...local(e), e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== activePointer) return;
+    if (!active.has(e.pointerId)) return;
     e.preventDefault();
     const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e];
-    for (const ev of events.length > 0 ? events : [e]) game.pointerMove?.(...local(ev));
+    for (const ev of events.length > 0 ? events : [e]) game.pointerMove?.(...local(ev), e.pointerId);
   });
   const end = (e: PointerEvent): void => {
-    if (e.pointerId !== activePointer) return;
-    activePointer = null;
-    game.pointerUp?.(...local(e));
+    if (!active.has(e.pointerId)) return;
+    active.delete(e.pointerId);
+    game.pointerUp?.(...local(e), e.pointerId);
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);

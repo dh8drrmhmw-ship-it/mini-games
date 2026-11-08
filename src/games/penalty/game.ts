@@ -10,10 +10,12 @@ import * as D from './draw.ts';
 import {
   bodyLine,
   chooseGuess,
+  chooseCommit,
   chooseTell,
   chooseWait,
   diveProgress,
   favorite,
+  reachPoint,
   GOALS_TO_CLEAR,
   isGoal,
   LIVES,
@@ -45,11 +47,13 @@ import {
   GOAL_H,
   makeCamera,
   project,
+  shotFromAim,
   shotFromSwipe,
   SPOT_Z,
   ZONE_NAMES,
   ZONES,
   zoneCol,
+  type Aim,
   type Camera,
   type Shot,
   type Zone,
@@ -59,6 +63,8 @@ const KEY = {
   history: 'penalty.history',
   runs: 'penalty.runs',
   tutorial: 'penalty.tutorial',
+  tutorialPro: 'penalty.tutorial.pro',
+  control: 'penalty.control',
   total: 'penalty.total',
   shooter: 'penalty.shooter',
   boots: 'penalty.boots',
@@ -68,6 +74,10 @@ const KEY = {
 const HISTORY_MAX = 80;
 const RESULT_TIME = 1.6;
 const KICK_TIME = 0.16;
+/** 进阶操作：助跑多久（秒）、最多等多久、蓄满一条要多久 */
+const RUNUP = 0.9;
+const RUNUP_MAX = 1.25;
+const CHARGE_TIME = 0.75;
 export const STAGES = PERSONAS.length;
 
 /** 称号：按过了几关。 */
@@ -86,7 +96,10 @@ export function rankFor(cleared: number): string {
   return name;
 }
 
-type Phase = 'stages' | 'players' | 'boots' | 'intro' | 'aim' | 'kick' | 'flight' | 'result' | 'clear' | 'over';
+type Phase = 'stages' | 'players' | 'boots' | 'intro' | 'aim' | 'runup' | 'kick' | 'flight' | 'result' | 'clear' | 'over';
+
+/** 操作方式：进阶（瞄准 + 蓄力，像实况）或简单（划一下）。 */
+export type Control = 'pro' | 'simple';
 
 interface Particle {
   x: number;
@@ -156,6 +169,26 @@ class Penalty implements Game {
   private timeScale = 1;
 
   // 手指
+  readonly multiTouch = true;
+  private control: Control = 'pro';
+  private tutorialProSeen = false;
+  // 进阶操作
+  private aim: Aim = { dir: 0, elev: 0.3 };
+  private aimId: number | null = null;
+  private aimLast = { x: 0, y: 0 };
+  private shootId: number | null = null;
+  private shootDownX = 0;
+  private charging = false;
+  private power = 0;
+  private curve = 0;
+  private releasedAt: number | null = null;
+  private reaim = 0;
+  private commit: { early: boolean; fake: boolean; at: number } = { early: false, fake: false, at: 1 };
+  private earlyAt: number | null = null;
+  private stepSide: -1 | 0 | 1 = 0;
+  private headStart = 0;
+  private stepsPlayed = 0;
+  private shootBtn = { x: 0, y: 0, r: 0 };
   private dragging = false;
   private dragPoints: { x: number; y: number; t: number }[] = [];
 
@@ -187,6 +220,8 @@ class Penalty implements Game {
       .map(Number)
       .filter((z) => Number.isInteger(z) && z >= 0 && z <= 5) as Zone[];
     this.tutorialSeen = host.save.get(KEY.tutorial) === '1';
+    this.tutorialProSeen = host.save.get(KEY.tutorialPro) === '1';
+    this.control = host.save.get(KEY.control) === 'simple' ? 'simple' : 'pro';
     try {
       const st = JSON.parse(host.save.get(KEY.stars) ?? '[]') as unknown;
       this.stars = Array.isArray(st) ? st.map((x) => Number(x) || 0) : [];
@@ -257,10 +292,22 @@ class Penalty implements Game {
     this.afterT = 0;
     this.timeScale = 1;
     this.trail = [];
+    this.aim = { dir: 0, elev: 0.3 };
+    this.charging = false;
+    this.power = 0;
+    this.curve = 0;
+    this.releasedAt = null;
+    this.reaim = 0;
+    this.earlyAt = null;
+    this.stepSide = 0;
+    this.headStart = 0;
+    this.stepsPlayed = 0;
+    this.shootId = null;
     const p = this.persona;
     this.waiting = chooseWait(p, this.rng);
     this.guess = chooseGuess(p, this.history, this.rng);
     this.lean = this.waiting ? 0 : chooseTell(p, this.guess, this.rng);
+    this.commit = this.waiting ? { early: false, fake: false, at: 1 } : chooseCommit(p, this.rng);
     this.wind = p.wind > 0 ? Math.round((this.rng.int(2001) / 1000 - 1) * p.wind * 2) / 2 : 0;
     const taunt = this.waiting ? (this.rng.chance(1, 3) ? '我不猜，等你踢。' : null) : tauntLine(p, this.guess, this.history, this.rng);
     this.bubble = taunt ? { text: taunt, t: -0.6, face: 'smug' } : null;
@@ -281,11 +328,19 @@ class Penalty implements Game {
 
   // ---------- 操作 ----------
 
-  pointerDown(x: number, y: number, t?: number): void {
-    const playing = this.phase === 'aim' || this.phase === 'kick' || this.phase === 'flight' || this.phase === 'result' || this.phase === 'intro';
+  pointerDown(x: number, y: number, t?: number, id = 0): void {
+    const playing = this.phase === 'aim' || this.phase === 'runup' || this.phase === 'kick' || this.phase === 'flight' || this.phase === 'result' || this.phase === 'intro';
     if (playing && inRect(this.soundBtn, x, y, 8)) {
       this.host.sound.setEnabled(!this.host.sound.enabled);
       this.host.sound.play('click');
+      return;
+    }
+    // 进阶操作：助跑时另一只手还能改方向
+    if (this.phase === 'runup' && this.control === 'pro') {
+      if (this.aimId === null && id !== this.shootId) {
+        this.aimId = id;
+        this.aimLast = { x, y };
+      }
       return;
     }
     for (const b of this.buttons) {
@@ -308,7 +363,10 @@ class Penalty implements Game {
     if (this.phase === 'intro') {
       if (this.phaseT < 0.35) return;
       this.host.sound.play('whistle');
-      if (!this.tutorialSeen) {
+      if (this.control === 'pro') {
+        this.tutorialProSeen = true;
+        this.host.save.set(KEY.tutorialPro, '1');
+      } else if (!this.tutorialSeen) {
         this.tutorialSeen = true;
         this.host.save.set(KEY.tutorial, '1');
       }
@@ -320,17 +378,44 @@ class Penalty implements Game {
       this.switchFoot();
       return;
     }
+    if (this.control === 'pro') {
+      const sb = this.shootBtn;
+      if (Math.hypot(x - sb.x, y - sb.y) <= sb.r + 10) return this.startRunup(x, id);
+      if (this.aimId === null) {
+        this.aimId = id;
+        this.aimLast = { x, y };
+      }
+      return;
+    }
+    if (this.dragging) return;
     this.dragging = true;
     this.dragPoints = [{ x, y, t: t ?? this.time }];
   }
 
-  pointerMove(x: number, y: number, t?: number): void {
+  pointerMove(x: number, y: number, t?: number, id = 0): void {
+    if (this.control === 'pro') {
+      if (id === this.aimId && (this.phase === 'aim' || this.phase === 'runup')) this.moveAim(x, y);
+      if (id === this.shootId && this.charging) this.curve = Math.max(-1, Math.min(1, (x - this.shootDownX) / 70));
+      return;
+    }
     if (!this.dragging) return;
     this.dragPoints.push({ x, y, t: t ?? this.time });
     if (this.dragPoints.length > 200) this.dragPoints.splice(1, 1);
   }
 
-  pointerUp(x: number, y: number, t?: number): void {
+  pointerUp(x: number, y: number, t?: number, id = 0): void {
+    if (this.control === 'pro') {
+      if (id === this.aimId) this.aimId = null;
+      if (id === this.shootId) {
+        this.shootId = null;
+        if (this.charging) {
+          this.charging = false;
+          this.curve = Math.max(-1, Math.min(1, (x - this.shootDownX) / 70));
+          this.releasedAt = this.phaseT;
+        }
+      }
+      return;
+    }
     if (!this.dragging) return;
     this.dragging = false;
     this.dragPoints.push({ x, y, t: t ?? this.time });
@@ -342,6 +427,56 @@ class Penalty implements Game {
     this.pending = shot;
     this.bubble = null;
     this.setPhase('kick');
+  }
+
+  /** 进阶操作：拖动改瞄准。左右拖改方向，上下拖改高低。助跑时改方向要算「临时改主意」。 */
+  private moveAim(x: number, y: number): void {
+    const { width: W, height: H } = this.view;
+    const before = this.aim;
+    const dir = Math.max(-1.15, Math.min(1.15, before.dir + (x - this.aimLast.x) / (W * 0.5)));
+    const elev = Math.max(0, Math.min(1.15, before.elev - (y - this.aimLast.y) / (H * 0.32)));
+    this.aimLast = { x, y };
+    if (this.phase === 'runup') this.reaim += Math.abs(dir - before.dir) * 4.2 + Math.abs(elev - before.elev) * 2.7;
+    this.aim = { dir, elev };
+  }
+
+  /** 进阶操作：按下射门键，开始助跑和蓄力。 */
+  private startRunup(x: number, id: number): void {
+    this.shootId = id;
+    this.shootDownX = x;
+    this.charging = true;
+    this.power = 0;
+    this.curve = 0;
+    this.releasedAt = null;
+    this.bubble = null;
+    this.setPhase('runup');
+  }
+
+  /** 助跑中：蓄力条涨、门将可能先动、到点就踢。 */
+  private updateRunup(dt: number): void {
+    if (this.charging) this.power = Math.min(1.3, this.power + dt / CHARGE_TIME);
+    const k = this.phaseT / RUNUP;
+    for (const at of [0.15, 0.42, 0.7]) {
+      if (k >= at && this.stepsPlayed < [0.15, 0.42, 0.7].indexOf(at) + 1) {
+        this.stepsPlayed++;
+        this.host.sound.play('step', at);
+      }
+    }
+    if (!this.waiting && this.earlyAt === null && this.stepSide === 0 && k >= this.commit.at) {
+      if (this.commit.early) this.earlyAt = this.time;
+      else if (this.commit.fake) {
+        const col = zoneCol(this.guess);
+        this.stepSide = col === 0 ? 1 : col === 2 ? -1 : this.rng.chance(1, 2) ? 1 : -1;
+      }
+    }
+    const done = !this.charging && this.phaseT >= Math.max(RUNUP, (this.releasedAt ?? 0) + 0.08);
+    if (done || this.phaseT >= RUNUP_MAX) {
+      this.charging = false;
+      const shot = shotFromAim(this.aim, this.power, this.curve, this.kicker(), this.rng, this.wind, this.reaim);
+      if (this.shooter.skill === 'cannon' && shot.power >= 0.75) shot.time *= 0.88;
+      this.pending = shot;
+      this.setPhase('kick');
+    }
   }
 
   private kicker(): ReturnType<typeof kickerFor> & { chip: boolean } {
@@ -358,12 +493,16 @@ class Penalty implements Game {
   /** 脚碰到球的那一刻：球飞出去。 */
   private kick(shot: Shot): void {
     const sh = this.shooter;
+    // 进阶操作里门将可能已经提前扑出去了；假动作的门将晃过一步，站的位置偏了
+    this.headStart = this.earlyAt !== null ? this.time - this.earlyAt : 0;
+    if (this.stepSide !== 0) this.lean = this.stepSide;
     this.shot = shot;
     this.res = resolveShot(this.persona, this.guess, this.lean, shot, {
       curveTrick: sh.skill === 'banana' ? 1.7 : 1,
       late: sh.skill === 'quick' ? 0.04 : 0,
       lucky: sh.skill === 'lucky',
       waiting: this.waiting,
+      headStart: this.headStart,
     });
     this.flightT = 0;
     this.afterT = 0;
@@ -419,7 +558,8 @@ class Penalty implements Game {
     }
     this.particles = this.particles.filter((p) => p.life > 0);
 
-    if (this.phase === 'kick' && this.phaseT >= KICK_TIME * 0.55 && this.pending) {
+    if (this.phase === 'runup') this.updateRunup(dt);
+    else if (this.phase === 'kick' && this.phaseT >= KICK_TIME * 0.55 && this.pending) {
       const shot = this.pending;
       this.pending = null;
       this.kick(shot);
@@ -631,12 +771,19 @@ class Penalty implements Game {
   /** 罚球的腿和球鞋：等射门时踩在球边，踢的时候摆过去。 */
   private drawLeg(ctx: Canvas2D): void {
     let k: number;
-    if (this.phase === 'aim' || this.phase === 'intro') k = 0;
-    else if (this.phase === 'kick') k = Math.min(1, this.phaseT / KICK_TIME) * 0.55;
+    let approach = 1;
+    if (this.phase === 'aim' || this.phase === 'intro') {
+      // 进阶操作：还没按射门键时人在后面，看不到脚
+      if (this.control === 'pro') return;
+      k = 0;
+    } else if (this.phase === 'runup') {
+      k = 0;
+      approach = Math.min(1, this.phaseT / RUNUP);
+    } else if (this.phase === 'kick') k = Math.min(1, this.phaseT / KICK_TIME) * 0.55;
     else if (this.phase === 'flight' && this.flightT < 0.25) k = 0.55 + (this.flightT / 0.25) * 0.45;
     else return;
     const b = this.ballScreen();
-    D.drawKickLeg(ctx, { x: b.x, y: b.y, r: BALL_R * b.s }, this.foot === 'R' ? 1 : -1, this.boots, this.shooter.jersey, k);
+    D.drawKickLeg(ctx, { x: b.x, y: b.y, r: BALL_R * b.s }, this.foot === 'R' ? 1 : -1, this.boots, this.shooter.jersey, k, approach);
   }
 
   private drawSpeed(ctx: Canvas2D): void {
@@ -690,6 +837,21 @@ class Penalty implements Game {
     ctx.save();
     const totalStars = this.stars.reduce((a, b) => a + b, 0);
     this.menuBackdrop(ctx, '点球闯关', `称号：${rankFor(this.cleared)} · 已过 ${this.cleared} / ${STAGES} 关 · ★ ${totalStars}`);
+    // 右上：操作方式
+    const ctl: Btn = {
+      x: W - 108,
+      y: safeTop + 14,
+      w: 96,
+      h: 30,
+      label: this.control === 'pro' ? '进阶操作' : '简单操作',
+      onTap: () => {
+        this.control = this.control === 'pro' ? 'simple' : 'pro';
+        this.host.save.set(KEY.control, this.control);
+        this.say(this.control === 'pro' ? '进阶操作：拖动瞄准，按住射门键蓄力（像实况）' : '简单操作：往想踢的地方划一下');
+      },
+    };
+    this.buttons.push(ctl);
+    D.drawPill(ctx, ctl);
     const top = safeTop + 92;
     const barH = 116;
     const bottom = H - safeBottom - barH - 8;
@@ -972,8 +1134,16 @@ class Penalty implements Game {
     let face: D.Face = 'ready';
     const moving = this.phase === 'flight' || this.phase === 'result';
     const t = this.phase === 'flight' ? this.flightT : this.shot ? this.shot.time + this.afterT : 0;
-    if (moving && this.res && t > p.reaction + this.res.late) {
-      const q = diveProgress(p, t, this.res.late);
+    const early = this.earlyAt !== null && (this.phase === 'runup' || this.phase === 'kick');
+    if (early) {
+      // 进阶操作：门将在你踢之前就扑出去了
+      const target = reachPoint(p, this.guess);
+      const dive = { startX: this.lean * 0.25, handX: target.x, handY: target.y, progressAtBall: 0 };
+      const line = bodyLine(dive, diveProgress(p, this.time - this.earlyAt! + p.reaction));
+      pose = { kind: 'line', fx: line.fx, fy: line.fy, hx: line.hx, hy: line.hy };
+      face = 'shock';
+    } else if (moving && this.res && (this.headStart > 0 || t > p.reaction + this.res.late)) {
+      const q = this.headStart > 0 ? diveProgress(p, t + this.headStart + p.reaction) : diveProgress(p, t, this.res.late);
       const line = bodyLine(this.res.dive, q);
       // 扑完以后倒在地上
       const fall = this.phase === 'result' ? Math.min(1, Math.max(0, (this.afterT - 0.15) / 0.45)) : 0;
@@ -987,6 +1157,7 @@ class Penalty implements Game {
       const tellWave = Math.max(0, Math.sin(this.time * 1.7));
       const lean = this.lean * Math.pow(tellWave, 3) * 1.0;
       pose = { kind: 'idle', x: sway + this.lean * 0.15 * tellWave, lean, bounce: Math.abs(Math.sin(this.time * (4 + p.bouncy * 4))) * (0.4 + p.bouncy * 0.9) };
+      if (this.stepSide !== 0) pose = { kind: 'idle', x: sway * 0.3 + this.stepSide * 0.32, lean: this.stepSide * 0.9, bounce: 0.2 };
       if (this.bubble && this.bubble.t > 0) face = 'smug';
     }
     this.keeperHead = D.drawKeeper(ctx, this.cam, p, pose, face);
@@ -1005,6 +1176,7 @@ class Penalty implements Game {
   }
 
   private drawSwipe(ctx: Canvas2D): void {
+    if (this.control === 'pro') return this.drawProAim(ctx);
     if (this.phase !== 'aim') return;
     if (!this.dragging || this.dragPoints.length < 2) {
       if (this.shotsThisStage < 2 && this.phaseT > 0.6) this.drawHint(ctx);
@@ -1062,6 +1234,97 @@ class Penalty implements Game {
       const label = shot.chip ? '勺子' : shot.power > 0.7 ? '大力' : shot.power > 0.35 ? '中等' : '轻推';
       ctx.fillText(label, ball.x, by + 26);
     }
+    ctx.restore();
+  }
+
+  /** 进阶操作：瞄准箭头（只画球刚飞出去的一段）、射门键、蓄力条、弧线。 */
+  private drawProAim(ctx: Canvas2D): void {
+    if (this.phase !== 'aim' && this.phase !== 'runup') return;
+    const { width: W, height: H, safeBottom } = this.view;
+    const ball = this.ballScreen();
+    const power = this.phase === 'runup' ? this.power : 0.6;
+    const preview = shotFromAim(this.aim, Math.min(1, power), this.curve, this.kicker(), new Rng(1));
+    const shot = { ...preview, tx: preview.aimX, ty: preview.aimY };
+    const full = this.stage < 2;
+    ctx.save();
+    // 轨迹带：一段半透明的带子
+    const pts: { x: number; y: number; s: number }[] = [];
+    const n = full ? 20 : 8;
+    for (let i = 0; i <= n; i++) {
+      const q = ballAt(shot, (shot.time * i) / 20);
+      pts.push(project(this.cam, q.x, q.y, q.z));
+    }
+    for (let i = 2; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      ctx.strokeStyle = `rgba(255,216,74,${0.75 - (i / pts.length) * 0.55})`;
+      ctx.lineWidth = Math.max(3, BALL_R * 2 * b.s * 0.9);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    if (full) {
+      const end = project(this.cam, shot.tx, shot.ty, 0);
+      ctx.strokeStyle = 'rgba(255,216,74,0.9)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(end.x, end.y, 12, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // 蓄力条：0～1 正常，超过 1 是蓄过头
+    const bw = 140;
+    const bx = ball.x - bw / 2;
+    const by = ball.y + 40;
+    roundRectPath(ctx, bx, by, bw, 12, 6);
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fill();
+    const fillW = Math.min(1.3, this.power) / 1.3;
+    if (fillW > 0) {
+      const g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      g.addColorStop(0, '#8ce696');
+      g.addColorStop(0.5, '#ffcf3f');
+      g.addColorStop(0.77, '#ff9a3f');
+      g.addColorStop(0.78, '#ff4b3a');
+      g.addColorStop(1, '#ff4b3a');
+      roundRectPath(ctx, bx, by, Math.max(12, bw * fillW), 12, 6);
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillRect(bx + bw / 1.3 - 1, by - 3, 2, 18);
+    ctx.font = `700 12px ${D.FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    const label =
+      this.phase === 'aim' ? '拖动屏幕瞄准' : this.power > 1 ? '蓄过头了！' : this.power > 0.75 ? '大力' : this.power > 0.35 ? '中等' : '轻推';
+    ctx.fillText(this.curve !== 0 && this.phase === 'runup' ? `${label} · ${this.curve > 0 ? '往右' : '往左'}弧线` : label, ball.x, by + 30);
+    // 射门键
+    const r = 44;
+    this.shootBtn = { x: W - 20 - r, y: H - safeBottom - 76 - r, r };
+    const sb = this.shootBtn;
+    ctx.beginPath();
+    ctx.arc(sb.x, sb.y + 4, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(sb.x, sb.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = this.charging ? '#ffb347' : D.PAL.accent;
+    ctx.fill();
+    if (this.charging) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(sb.x, sb.y, r - 6, -Math.PI / 2, -Math.PI / 2 + (Math.min(1.3, this.power) / 1.3) * Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = D.PAL.cardInk;
+    ctx.font = `900 18px ${D.FONT}`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText('射门', sb.x, sb.y - 4);
+    ctx.font = `600 10px ${D.FONT}`;
+    ctx.fillText(this.charging ? '松手 · 侧滑弧线' : '按住蓄力', sb.x, sb.y + 14);
     ctx.restore();
   }
 
@@ -1178,7 +1441,7 @@ class Penalty implements Game {
 
   private drawIntro(ctx: Canvas2D): void {
     const p = this.persona;
-    const tutorial = !this.tutorialSeen;
+    const tutorial = this.control === 'pro' ? !this.tutorialProSeen : !this.tutorialSeen;
     ctx.save();
     const c = this.card(ctx, (tutorial ? 520 : 380) + (p.wait >= 0.3 ? 24 : 0));
     const cx = c.x + c.w / 2;
@@ -1219,13 +1482,22 @@ class Penalty implements Game {
     if (tutorial) {
       ctx.font = `500 14px ${D.FONT}`;
       ctx.fillStyle = D.PAL.cardInk;
-      const lines = [
-        '往想踢的位置划一下就射门。前两关会画出落点。',
-        '先往一边划再拐过来，就是弧线球。',
-        '划得越快，球越快，也越容易偏。',
-        '右下角可以换脚；用逆足会弱一些。',
-        '门将会记住你往哪儿踢。',
-      ];
+      const lines =
+        this.control === 'pro'
+          ? [
+              '一只手在屏幕上拖动瞄准：左右、高低。',
+              '另一只手按住「射门」蓄力，松手；蓄太满会踢飞。',
+              '松手时往旁边一滑，就是弧线球。',
+              '助跑时还能改方向：门将先倒了就踢另一边。',
+              '前两关会画出落点；门将会记住你往哪儿踢。',
+            ]
+          : [
+              '往想踢的位置划一下就射门。前两关会画出落点。',
+              '先往一边划再拐过来，就是弧线球。',
+              '划得越快，球越快，也越容易偏。',
+              '右下角可以换脚；用逆足会弱一些。',
+              '门将会记住你往哪儿踢。',
+            ];
       lines.forEach((l, i) => ctx.fillText(l, cx, y + i * 22));
     }
     ctx.fillStyle = D.PAL.cardMuted;

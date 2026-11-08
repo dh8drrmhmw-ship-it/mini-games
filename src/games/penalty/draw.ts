@@ -631,9 +631,10 @@ function bootTop(ctx: Canvas2D, x: number, y: number, r: number, angle: number, 
  * 罚球的那条腿：等着射门时脚踩在球旁边；踢的时候 k 从 0 走到 1：往后摆、踢到球、往前送。
  * side：-1 左脚，1 右脚。
  */
-export function drawKickLeg(ctx: Canvas2D, ball: { x: number; y: number; r: number }, side: -1 | 1, boot: BootLook, sock: string, k: number): void {
+export function drawKickLeg(ctx: Canvas2D, ball: { x: number; y: number; r: number }, side: -1 | 1, boot: BootLook, sock: string, k: number, approach = 1): void {
   const r = ball.r;
-  const rest = { x: ball.x + side * r * 1.7, y: ball.y + r * 1.7 };
+  // approach：助跑时脚从下面走过来（0 在画面下面，1 到了球边）
+  const rest = { x: ball.x + side * r * (1.7 + (1 - approach) * 1.5), y: ball.y + r * (1.7 + (1 - approach) * 7) };
   const back = { x: ball.x + side * r * 1.5, y: ball.y + r * 3.3 };
   const hit = { x: ball.x + side * r * 0.45, y: ball.y + r * 0.9 };
   const follow = { x: ball.x - side * r * 0.9, y: ball.y - r * 2.6 };
