@@ -43,6 +43,12 @@ export interface Persona extends Look {
   /** 射门前「往要扑的那边晃」的概率；假动作（往反方向晃）的概率 */
   tell: number;
   fakeTell: number;
+  /** 不猜、站着等球的概率：等球的门将看清球的方向再扑，慢球、不够偏的球都会被扑出 */
+  wait: number;
+  /** 等球时最远能扑到离中线多远（米）：死角在这之外 */
+  range: number;
+  /** 这一关的风最大有多大（米/秒，0 = 没风）：风会把球往一边吹 */
+  wind: number;
   /** 射门前挑衅的概率，以及挑衅时说真话的概率 */
   taunt: number;
   truth: number;
@@ -81,6 +87,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 3, wFreq: 0.3, wM1: 0, wM2: 0,
     reaction: 0.16, dive: 0.55, adjust: 0.25, reach: 0.34,
     tell: 0.65, fakeTell: 0, taunt: 0, truth: 1,
+    wait: 0, range: 2.0, wind: 0,
     lines: {
       save: ['我、我扑到了？！', '妈妈我扑到了！', '运气，是运气！'],
       goal: ['呜……', '太快了看不清', '下次我一定行'],
@@ -96,6 +103,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 2, wFreq: 0.4, wM1: 0, wM2: 0,
     reaction: 0.12, dive: 0.5, adjust: 0.3, reach: 0.4,
     tell: 0.4, fakeTell: 0, taunt: 0.2, truth: 0.8,
+    wait: 0.15, range: 2.35, wind: 0,
     lines: {
       save: ['够得着～', '手长没办法', '低头？我懒得低'],
       goal: ['腰……我的腰', '太低了！', '下次我蹲着'],
@@ -111,6 +119,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.9, wFreq: 0.75, wM1: 0, wM2: 0,
     reaction: 0.08, dive: 0.44, adjust: 0.5, reach: 0.37,
     tell: 0.3, fakeTell: 0.05, taunt: 0.3, truth: 0.6,
+    wait: 0.35, range: 2.2, wind: 0,
     lines: {
       save: ['太慢了。', '这球我闭着眼都能扑', '喵～'],
       goal: ['下一个我一定扑到', '有点东西', '哼'],
@@ -127,6 +136,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.9, wFreq: 0.6, wM1: 0.2, wM2: 0,
     reaction: 0.13, dive: 0.52, adjust: 0.4, reach: 0.55,
     tell: 0.25, fakeTell: 0.05, taunt: 0.3, truth: 0.7,
+    wait: 0.35, range: 1.95, wind: 3,
     lines: {
       save: ['撞墙了吧？', '嗯。', '我就站这儿，你随意'],
       goal: ['……跑不动了', '太远了够不着', '给我等着'],
@@ -142,6 +152,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.8, wFreq: 0.5, wM1: 0.25, wM2: 0,
     reaction: 0.05, dive: 0.33, adjust: 0.62, reach: 0.33,
     tell: 0.2, fakeTell: 0.1, taunt: 0.35, truth: 0.5,
+    wait: 0.35, range: 2.3, wind: 0,
     lines: {
       save: ['嘿！扑到啦！', '我飞起来啦！', '快不快？快不快？'],
       goal: ['哎呀够不着！', '手再长一点就好了', '再来再来！'],
@@ -156,6 +167,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.6, wFreq: 0.45, wM1: 0.45, wM2: 0,
     reaction: 0.09, dive: 0.44, adjust: 0.48, reach: 0.4,
     tell: 0.15, fakeTell: 0.15, taunt: 0.4, truth: 0.5,
+    wait: 0.2, range: 2.3, wind: 3.5,
     lines: {
       save: ['我就知道你会踢{zone}！', '记住了吧？我可记住你了', '又是这招？'],
       goal: ['我记住了，你给我等着', '这笔账我记下了', '好，很好'],
@@ -171,6 +183,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.4, wFreq: 0.3, wM1: 0.35, wM2: 0.3,
     reaction: 0.07, dive: 0.41, adjust: 0.55, reach: 0.43,
     tell: 0.1, fakeTell: 0.3, taunt: 0.5, truth: 0.4,
+    wait: 0.3, range: 2.35, wind: 0,
     lines: {
       save: ['你想踢{zone}，我早就看到了', '套路，都是套路', '下一脚我也知道'],
       goal: ['有点意思……', '这一脚，我没算到', '你变了'],
@@ -186,6 +199,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.45, wFreq: 0.35, wM1: 0.4, wM2: 0.1,
     reaction: 0.07, dive: 0.4, adjust: 0.55, reach: 0.42,
     tell: 0.05, fakeTell: 0.35, taunt: 0.9, truth: 0.3,
+    wait: 0.25, range: 2.35, wind: 4,
     lines: {
       save: ['我说什么来着？我说什么来着！', '早告诉你了嘛', '{zone}！我就知道！'],
       goal: ['那是我让你的', '刚才那个不算', '我刚才没准备好'],
@@ -201,6 +215,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.35, wFreq: 0.35, wM1: 0.35, wM2: 0.25,
     reaction: 0.05, dive: 0.39, adjust: 0.65, reach: 0.45,
     tell: 0.05, fakeTell: 0.25, taunt: 0.15, truth: 0.5,
+    wait: 0.4, range: 2.4, wind: 3,
     lines: {
       save: ['……', '不行。', '下一个。'],
       goal: ['……嗯。', '还行。', '再来。'],
@@ -216,6 +231,7 @@ export const PERSONAS: readonly Persona[] = [
     temp: 0.3, wFreq: 0.35, wM1: 0.35, wM2: 0.25,
     reaction: 0.05, dive: 0.37, adjust: 0.72, reach: 0.47,
     tell: 0.05, fakeTell: 0.3, taunt: 0.35, truth: 0.4,
+    wait: 0.4, range: 2.45, wind: 4.5,
     lines: {
       save: ['这里不让进。', '还有吗？', '{zone}？太明显了'],
       goal: ['……运气好而已', '你是第一个', '再来'],
@@ -301,6 +317,11 @@ export function chooseGuess(p: Persona, history: readonly Zone[], rng: Rng): Zon
 }
 
 /** 射门前晃一下：-1 往左，1 往右，0 不晃。可能是真的，也可能是假动作。 */
+/** 这一脚门将是猜，还是站着等球。 */
+export function chooseWait(p: Persona, rng: Rng): boolean {
+  return rng.int(1000) < p.wait * 1000;
+}
+
 export function chooseTell(p: Persona, guess: Zone, rng: Rng): -1 | 0 | 1 {
   const col = zoneCol(guess);
   if (col === 1) return 0;
@@ -333,6 +354,8 @@ export interface ShotOptions {
   late?: number;
   /** 打中门柱总能弹进（幸运星） */
   lucky?: boolean;
+  /** 门将这一脚没猜，站着等球 */
+  waiting?: boolean;
 }
 
 export interface Resolution {
@@ -372,8 +395,18 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
  * 能往球的方向修正一点：球越慢，修正越多。扑错方向就只能看着。
  */
 export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, opts: ShotOptions = {}): Resolution {
-  const late = opts.late ?? 0;
   const startX = lean * 0.25;
+  // 等球：看清方向再扑，所以起步更晚；扑向他看到的方向（弧线球一开始的方向会骗他），最远扑到 range
+  if (opts.waiting) {
+    const late = (opts.late ?? 0) + 0.1;
+    const seen = shot.tx + shot.bend * 1.4 * (opts.curveTrick ?? 1);
+    const handX = Math.max(-p.range, Math.min(p.range, seen));
+    const handY = Math.min(2.25 + (p.height - 1.88), Math.max(0.3, shot.ty));
+    const progress = diveProgress(p, shot.time, late);
+    const dive: Dive = { startX: 0, handX, handY, progressAtBall: progress };
+    return judge(p, shot, dive, late, opts);
+  }
+  const late = opts.late ?? 0;
   const target = reachPoint(p, guess);
   let handX = target.x;
   let handY = target.y;
@@ -393,15 +426,21 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, o
   handY = Math.min(2.35 + (p.height - 1.88), Math.max(0.25, handY));
   const progress = diveProgress(p, shot.time, late);
   const dive: Dive = { startX, handX, handY, progressAtBall: progress };
-  const body = bodyLine(dive, progress);
+  const res = judge(p, shot, dive, late, opts);
+  if (shot.chip && res.outcome !== 'over' && res.outcome !== 'wide' && shot.ty < GOAL_H) {
+    // 勺子：门将先往一边倒了就进；他站着没动，轻松抱住
+    return col === 1 ? { ...res, outcome: 'save', closest: 0 } : { ...res, outcome: 'goal', closest: 2 };
+  }
+  return res;
+}
+
+/** 门将扑到哪儿已经定了，看球进没进。 */
+function judge(p: Persona, shot: Shot, dive: Dive, late: number, opts: ShotOptions): Resolution {
+  const body = bodyLine(dive, dive.progressAtBall);
   const closest = distToSegment(shot.tx, shot.ty, body.fx, body.fy, body.hx, body.hy);
   const r = (outcome: Outcome): Resolution => ({ outcome, dive, closest, late });
 
   const inFrame = Math.abs(shot.tx) < HALF_W + BALL_R && shot.ty < GOAL_H + BALL_R;
-  if (shot.chip && inFrame && shot.ty < GOAL_H) {
-    // 勺子：门将先往一边倒了就进；他站着没动，轻松抱住
-    return col === 1 ? { ...r('save'), closest: 0 } : { ...r('goal'), closest: 2 };
-  }
   if (inFrame && closest <= p.reach + BALL_R) return r('save');
 
   const nearPost = Math.abs(Math.abs(shot.tx) - HALF_W) < BALL_R + POST_R && shot.ty < GOAL_H + BALL_R;

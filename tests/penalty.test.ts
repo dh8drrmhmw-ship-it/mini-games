@@ -178,6 +178,27 @@ describe('点球：门将扑救', () => {
     expect(resolveShot(rookie, 0, 0, shot(3.72, 1.2), { lucky: true }).outcome).toBe('post-in');
   });
 
+  it('站着等球的门将：中路、不够偏的球扑得到，又快又贴边的死角扑不到', () => {
+    const iron = PERSONAS.find((p) => p.id === 'iron')!;
+    expect(resolveShot(iron, 0, 0, shot(1.6, 1.0, 0.5), { waiting: true }).outcome).toBe('save');
+    expect(resolveShot(iron, 0, 0, shot(3.3, 2.1, 0.45), { waiting: true }).outcome).toBe('goal');
+    // 弧线球一开始的方向骗了他
+    const curl = { ...shot(1.6, 1.0, 0.55), bend: -1.2 }; // 一开始往中间飞，最后拐到右边
+    expect(resolveShot(iron, 0, 0, curl, { waiting: true }).outcome).toBe('goal');
+  });
+
+  it('风会把球吹偏，越慢的球吹得越多', () => {
+    const fast = swipeTo(0, 1, 0.06, normal);
+    const fastWind = shotFromSwipe(cam, ball, { points: line(0, 1, 0.06) }, new Rng(1), normal, 4);
+    const slowWind = shotFromSwipe(cam, ball, { points: line(0, 1, 1.2) }, new Rng(1), normal, 4);
+    const slow = swipeTo(0, 1, 1.2, normal);
+    if (typeof fast === 'string' || typeof fastWind === 'string' || typeof slowWind === 'string' || typeof slow === 'string') throw new Error('不该失败');
+    expect(fastWind.tx - fast.tx).toBeGreaterThan(0.5);
+    expect(slowWind.tx - slow.tx).toBeGreaterThan(fastWind.tx - fast.tx);
+    // 飞到一半时还没怎么偏，后半段才偏过去
+    expect(ballAt(slowWind, slowWind.time * 0.3).x).toBeLessThan(slowWind.tx * 0.3 + 0.1);
+  });
+
   it('门将有高有矮：高个子够得到上角，矮个子够不着', () => {
     const pole = PERSONAS.find((p) => p.id === 'pole')!;
     const spring = PERSONAS.find((p) => p.id === 'spring')!;
@@ -225,19 +246,19 @@ describe('点球：门将记仇', () => {
 });
 
 describe('点球：平衡（模拟玩家）', () => {
-  it('门将大体上一个比一个难，乱踢的玩家也打得进', () => {
+  it('门将大体上一个比一个难，乱踢的玩家前几关也打得进', () => {
     const rates = PERSONAS.map((p) => successRate(p, 'random', 3000, 7).goal);
-    expect(rates[0]).toBeGreaterThan(0.78);
-    expect(rates[9]).toBeGreaterThan(0.5);
-    expect(rates[9]).toBeLessThan(0.75);
-    expect(rates[9]).toBeLessThan(rates[0]! - 0.15);
+    expect(rates[0]).toBeGreaterThan(0.75);
+    expect(rates[9]).toBeGreaterThan(0.2);
+    expect(rates[9]).toBeLessThan(0.5);
+    expect(rates[9]).toBeLessThan(rates[0]! - 0.3);
   });
 
-  it('第一关几乎都能过，最后一关有一定难度', () => {
-    expect(passRate(PERSONAS[0]!, 'human', 800, 11)).toBeGreaterThan(0.85);
-    const last = passRate(PERSONAS[9]!, 'human', 800, 11);
-    expect(last).toBeGreaterThan(0.08);
-    expect(last).toBeLessThan(0.5);
+  it('高手：第一关几乎都能过，最后一关大约两成', () => {
+    expect(passRate(PERSONAS[0]!, 'skilled', 800, 11)).toBeGreaterThan(0.85);
+    const last = passRate(PERSONAS[9]!, 'skilled', 800, 11);
+    expect(last).toBeGreaterThan(0.1);
+    expect(last).toBeLessThan(0.35);
   });
 
   it('老踢同一个地方，从第三关起基本过不去', () => {

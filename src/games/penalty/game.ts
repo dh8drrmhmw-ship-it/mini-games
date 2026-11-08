@@ -11,6 +11,7 @@ import {
   bodyLine,
   chooseGuess,
   chooseTell,
+  chooseWait,
   diveProgress,
   favorite,
   GOALS_TO_CLEAR,
@@ -143,6 +144,10 @@ class Penalty implements Game {
   // 这一脚
   private guess: Zone = 0;
   private lean: -1 | 0 | 1 = 0;
+  /** 门将这一脚不猜、站着等球 */
+  private waiting = false;
+  /** 这一脚的风（米/秒，正数往右吹） */
+  private wind = 0;
   private pending: Shot | null = null;
   private shot: Shot | null = null;
   private res: Resolution | null = null;
@@ -252,9 +257,12 @@ class Penalty implements Game {
     this.afterT = 0;
     this.timeScale = 1;
     this.trail = [];
-    this.guess = chooseGuess(this.persona, this.history, this.rng);
-    this.lean = chooseTell(this.persona, this.guess, this.rng);
-    const taunt = tauntLine(this.persona, this.guess, this.history, this.rng);
+    const p = this.persona;
+    this.waiting = chooseWait(p, this.rng);
+    this.guess = chooseGuess(p, this.history, this.rng);
+    this.lean = this.waiting ? 0 : chooseTell(p, this.guess, this.rng);
+    this.wind = p.wind > 0 ? Math.round((this.rng.int(2001) / 1000 - 1) * p.wind * 2) / 2 : 0;
+    const taunt = this.waiting ? (this.rng.chance(1, 3) ? '我不猜，等你踢。' : null) : tauntLine(p, this.guess, this.history, this.rng);
     this.bubble = taunt ? { text: taunt, t: -0.6, face: 'smug' } : null;
   }
 
@@ -327,7 +335,7 @@ class Penalty implements Game {
     this.dragging = false;
     this.dragPoints.push({ x, y, t: t ?? this.time });
     if (this.phase !== 'aim') return;
-    const shot = shotFromSwipe(this.cam, this.ballScreen(), { points: this.dragPoints }, this.rng, this.kicker());
+    const shot = shotFromSwipe(this.cam, this.ballScreen(), { points: this.dragPoints }, this.rng, this.kicker(), this.wind);
     if (shot === 'short') return this.say('往球门的方向划长一点');
     if (shot === 'down') return this.say('往球门的方向划');
     if (this.shooter.skill === 'cannon' && shot.power >= 0.75) shot.time *= 0.88;
@@ -355,6 +363,7 @@ class Penalty implements Game {
       curveTrick: sh.skill === 'banana' ? 1.7 : 1,
       late: sh.skill === 'quick' ? 0.04 : 0,
       lucky: sh.skill === 'lucky',
+      waiting: this.waiting,
     });
     this.flightT = 0;
     this.afterT = 0;
@@ -974,7 +983,7 @@ class Penalty implements Game {
       else face = 'shock';
     } else {
       // 等你射门：左右晃；会「露馅」的门将往要扑的那边多晃一下
-      const sway = Math.sin(this.time * 2.6) * 0.12;
+      const sway = this.waiting && this.phase === 'aim' ? Math.sin(this.time * 1.2) * 0.03 : Math.sin(this.time * 2.6) * 0.12;
       const tellWave = Math.max(0, Math.sin(this.time * 1.7));
       const lean = this.lean * Math.pow(tellWave, 3) * 1.0;
       pose = { kind: 'idle', x: sway + this.lean * 0.15 * tellWave, lean, bounce: Math.abs(Math.sin(this.time * (4 + p.bouncy * 4))) * (0.4 + p.bouncy * 0.9) };
@@ -1019,7 +1028,9 @@ class Penalty implements Game {
     if (typeof preview !== 'string') {
       const shot = { ...preview, tx: preview.aimX, ty: preview.aimY };
       const color = shot.power > 0.7 ? '255,107,91' : shot.power > 0.35 ? '255,207,63' : '140,230,150';
-      for (let i = 1; i <= 16; i++) {
+      // 前两关是练习：整条路线和落点都画出来；之后只画开头一小段，落点要靠自己
+      const full = this.stage < 2;
+      for (let i = 1; i <= (full ? 16 : 6); i++) {
         const q = ballAt(shot, (shot.time * i) / 16);
         const sp = project(this.cam, q.x, q.y, q.z);
         ctx.fillStyle = `rgba(${color},${0.25 + (i / 16) * 0.5})`;
@@ -1027,12 +1038,14 @@ class Penalty implements Game {
         ctx.arc(sp.x, sp.y, 2 + (i / 16) * 1.5, 0, Math.PI * 2);
         ctx.fill();
       }
-      const end = project(this.cam, shot.tx, shot.ty, 0);
-      ctx.strokeStyle = `rgba(${color},0.95)`;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(end.x, end.y, 8 + shot.power * 10, 0, Math.PI * 2);
-      ctx.stroke();
+      if (full) {
+        const end = project(this.cam, shot.tx, shot.ty, 0);
+        ctx.strokeStyle = `rgba(${color},0.95)`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, 8 + shot.power * 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       const ball = this.ballScreen();
       const bw = 120;
       const bx = ball.x - bw / 2;
@@ -1102,6 +1115,7 @@ class Penalty implements Game {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, W / 2, ly + 12.5);
+    if (this.wind !== 0) this.drawWind(ctx, 16, ly + 12);
     // 左下：罚球的人、用哪只脚、什么鞋
     const sh = this.shooter;
     const by = H - safeBottom - 32;
@@ -1130,11 +1144,43 @@ class Penalty implements Game {
     this.drawNotebook(ctx, top);
   }
 
+  /** 风向标：箭头指着风吹的方向，越长风越大。 */
+  private drawWind(ctx: Canvas2D, x: number, y: number): void {
+    const dir = Math.sign(this.wind);
+    const len = 18 + Math.abs(this.wind) * 9;
+    ctx.save();
+    roundRectPath(ctx, x - 4, y - 16, len + 74, 32, 16);
+    ctx.fillStyle = 'rgba(4,8,24,0.55)';
+    ctx.fill();
+    ctx.fillStyle = '#bfe3ff';
+    ctx.font = `800 13px ${D.FONT}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`风 ${Math.abs(this.wind).toFixed(1)}`, x + 6, y + 1);
+    const ax = x + 50;
+    const ex = dir > 0 ? ax + len : ax;
+    const sx = dir > 0 ? ax : ax + len;
+    const wob = Math.sin(this.time * 6) * 1.5;
+    ctx.strokeStyle = '#bfe3ff';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(sx, y + wob * 0.3);
+    ctx.lineTo(ex, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ex - dir * 7, y - 6);
+    ctx.lineTo(ex, y);
+    ctx.lineTo(ex - dir * 7, y + 6);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   private drawIntro(ctx: Canvas2D): void {
     const p = this.persona;
     const tutorial = !this.tutorialSeen;
     ctx.save();
-    const c = this.card(ctx, tutorial ? 520 : 380);
+    const c = this.card(ctx, (tutorial ? 520 : 380) + (p.wait >= 0.3 ? 24 : 0));
     const cx = c.x + c.w / 2;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1161,13 +1207,20 @@ class Penalty implements Game {
     y += 6;
     ctx.fillStyle = '#9a6a12';
     ctx.font = `800 14px ${D.FONT}`;
-    ctx.fillText(`进 ${GOALS_TO_CLEAR} 个球过关 · ${LIVES} 次机会`, cx, y);
-    y += 30;
+    ctx.fillText(`进 ${GOALS_TO_CLEAR} 个球过关 · ${LIVES} 次机会${p.wind > 0 ? ' · 有风' : ''}`, cx, y);
+    y += 26;
+    if (p.wait >= 0.3) {
+      ctx.fillStyle = D.PAL.cardMuted;
+      ctx.font = `600 13px ${D.FONT}`;
+      ctx.fillText('他常常不猜、站着等球：要踢得又快又贴边', cx, y);
+      y += 24;
+    }
+    y += 4;
     if (tutorial) {
       ctx.font = `500 14px ${D.FONT}`;
       ctx.fillStyle = D.PAL.cardInk;
       const lines = [
-        '往想踢的位置划一下就射门。',
+        '往想踢的位置划一下就射门。前两关会画出落点。',
         '先往一边划再拐过来，就是弧线球。',
         '划得越快，球越快，也越容易偏。',
         '右下角可以换脚；用逆足会弱一些。',

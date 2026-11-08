@@ -114,6 +114,8 @@ export interface Shot {
   weak: boolean;
   /** 勺子：往中间轻轻挑起来的高吊球 */
   chip?: boolean;
+  /** 被风吹偏了多少米（已经算在 tx 里；飞行路线后半段才偏过去） */
+  drift?: number;
 }
 
 /** 罚球球员的三项能力（1～5），见 players.ts。 */
@@ -156,7 +158,7 @@ export function swipeSpeed(points: Swipe['points'], toGoal: number): number {
  * - 力量：看这一划最快的时候有多快。越快球越快，但越容易偏。
  * - 弧线有顺逆：右脚顺的是「先往右再拐回左」，反方向只能弯一点、还更容易偏。
  */
-export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng, kicker: Kicker): Shot | SwipeProblem {
+export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng, kicker: Kicker, wind = 0): Shot | SwipeProblem {
   const pts = swipe.points;
   const a = pts[0]!;
   const b = pts[pts.length - 1]!;
@@ -206,8 +208,12 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   }
 
   // 脚下的偏差：越用力越不准，弧线越大越不准，球员越准偏得越少
-  const sd = (0.05 + 0.3 * power * power) * (1.45 - 0.2 * (kicker.accuracy - 1)) + Math.abs(bend) * (outside ? 0.25 : 0.06);
-  const tx = aimX + gauss(rng) * sd;
+  // 越往死角瞄越难踢准：离中间越远、越高，偏差越大
+  const corner = 1 + 0.35 * Math.min(1, Math.abs(aimX) / HALF_W) ** 2 + 0.3 * Math.min(1, aimY / GOAL_H) ** 2;
+  const sd = (0.05 + 0.3 * power * power) * (1.45 - 0.2 * (kicker.accuracy - 1)) * corner + Math.abs(bend) * (outside ? 0.25 : 0.06);
+  // 风：球飞得越久，被吹得越偏
+  const drift = weak ? 0 : wind * time * 0.42;
+  const tx = aimX + gauss(rng) * sd + drift;
   const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
 
   // 勺子：会踢勺子的球员，往中间偏上轻轻一挑
@@ -215,7 +221,7 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
     return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power, time: 1.0, bend: 0, weak, chip: true };
   }
 
-  return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak };
+  return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak, drift };
 }
 
 /** 球速（公里每小时），踢出去以后显示。 */
@@ -245,7 +251,7 @@ export function ballAt(shot: Shot, t: number): { x: number; y: number; z: number
   const bump = 4 * u * (1 - u);
   const arc = shot.chip ? 1.3 : shot.weak ? 0 : 0.12 + (1 - shot.power) * 0.35;
   return {
-    x: shot.tx * u + shot.bend * bump,
+    x: shot.tx * u + shot.bend * bump + (shot.drift ?? 0) * (u * u - u),
     y: Math.max(BALL_R, BALL_R + (shot.ty - BALL_R) * u + arc * bump),
     z: SPOT_Z * (1 - u),
   };
