@@ -2,6 +2,7 @@
 import { FONT, roundRectPath, wrapText } from '../shared/canvas.ts';
 import type { Canvas2D, View } from '../shared/host.ts';
 import type { Persona } from './keeper.ts';
+import type { Look } from './look.ts';
 import { BALL_R, GOAL_H, HALF_W, POST_R, project, type Camera } from './world.ts';
 
 export const PAL = {
@@ -288,17 +289,10 @@ export function drawBall(ctx: Canvas2D, cam: Camera, x: number, y: number, z: nu
   return { x: p.x, y: p.y, r };
 }
 
-// ---------- 门将 ----------
+// ---------- 人物 ----------
 
 export type Face = 'ready' | 'smug' | 'shock' | 'sad';
-
-/** 画头像要的长相：门将和罚球的球员都有这几项。 */
-export interface Look {
-  jersey: string;
-  jerseyDark: string;
-  skin: string;
-  hair: string;
-}
+export type { Look };
 
 export type KeeperPose =
   | { kind: 'idle'; x: number; lean: number; bounce: number }
@@ -327,34 +321,45 @@ function dot(ctx: Canvas2D, cam: Camera, c: [number, number], r: number, color: 
   return { x: p.x, y: p.y, r: Math.max(1.5, r * p.s) };
 }
 
-/** 门将。返回头在屏幕上的位置（用来放说话的气泡）。 */
+/**
+ * 门将：高矮胖瘦、球衣、短裤、手套都按门将自己的设定画。
+ * 返回头顶在屏幕上的位置（用来放说话的气泡）。
+ */
 export function drawKeeper(ctx: Canvas2D, cam: Camera, p: Persona, pose: KeeperPose, face: Face): { x: number; y: number } {
+  const h = p.height / 1.88;
+  const g = p.girth;
+  const torsoW = 0.4 * g;
+  const legW = 0.16 * (0.75 + 0.25 * g);
+  const armW = 0.115 * (0.8 + 0.2 * g);
+  const headR = 0.19 * (0.95 + 0.06 * g);
   ctx.save();
   let head: { x: number; y: number; r: number };
   if (pose.kind === 'idle') {
     const x = pose.x;
     const b = pose.bounce;
-    const hip: [number, number] = [x + pose.lean * 0.12, 0.78 - b * 0.04];
-    const sh: [number, number] = [x + pose.lean * 0.22, 1.38 - b * 0.04];
-    // 影子
-    const g = project(cam, x, 0, KZ);
+    const hip: [number, number] = [x + pose.lean * 0.12, (0.8 - b * 0.05) * h];
+    const sh: [number, number] = [x + pose.lean * 0.22, (1.38 - b * 0.05) * h];
+    const shadow = project(cam, x, 0, KZ);
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.beginPath();
-    ctx.ellipse(g.x, g.y, g.s * 0.5, g.s * 0.12, 0, 0, Math.PI * 2);
+    ctx.ellipse(shadow.x, shadow.y, shadow.s * 0.45 * g, shadow.s * 0.12, 0, 0, Math.PI * 2);
     ctx.fill();
     // 腿：微微下蹲
+    const knee = 0.42 * h;
     for (const side of [-1, 1]) {
-      seg(ctx, cam, [hip[0] + side * 0.12, hip[1]], [x + side * 0.22, 0.42], 0.17, '#1b1f2e');
-      seg(ctx, cam, [x + side * 0.22, 0.42], [x + side * 0.26, 0.06], 0.15, '#1b1f2e');
+      seg(ctx, cam, [hip[0] + side * 0.11 * g, hip[1]], [x + side * (0.2 + 0.04 * g), knee], legW, '#20242e');
+      seg(ctx, cam, [x + side * (0.2 + 0.04 * g), knee], [x + side * (0.24 + 0.04 * g), 0.06], legW * 0.9, '#20242e');
     }
-    seg(ctx, cam, hip, sh, 0.42, p.jersey);
+    // 短裤、身体
+    seg(ctx, cam, [hip[0], hip[1] - 0.05], [hip[0], hip[1] + 0.12], torsoW * 1.02, p.shorts);
+    seg(ctx, cam, [hip[0], hip[1] + 0.1], sh, torsoW, p.jersey);
     // 手臂张开
     for (const side of [-1, 1]) {
-      const hand: [number, number] = [x + side * 0.62 + pose.lean * 0.2, 1.05 + b * 0.05];
-      seg(ctx, cam, [sh[0] + side * 0.18, sh[1] - 0.04], hand, 0.12, p.jersey);
-      dot(ctx, cam, hand, 0.1, PAL.glove);
+      const hand: [number, number] = [x + side * (0.58 + 0.1 * h) + pose.lean * 0.2, (1.02 + b * 0.06) * h];
+      seg(ctx, cam, [sh[0] + side * torsoW * 0.42, sh[1] - 0.04], hand, armW, p.jerseyDark);
+      dot(ctx, cam, hand, 0.1, p.gloves);
     }
-    head = dot(ctx, cam, [sh[0], sh[1] + 0.27], 0.2, p.skin);
+    head = dot(ctx, cam, [sh[0], sh[1] + headR + 0.08], headR, p.skin);
   } else {
     const { fx, fy, hx, hy } = pose;
     const ux = hx - fx;
@@ -368,33 +373,139 @@ export function drawKeeper(ctx: Canvas2D, cam: Camera, p: Persona, pose: KeeperP
       ny = -ny;
     }
     const at = (k: number, off = 0): [number, number] => [fx + ux * k + nx * off, fy + uy * k + ny * off];
-    for (const side of [-1, 1]) seg(ctx, cam, at(0.34, side * 0.07), at(0.02, side * 0.12), 0.16, '#1b1f2e');
-    seg(ctx, cam, at(0.34), at(0.62), 0.42, p.jersey);
+    for (const side of [-1, 1]) seg(ctx, cam, at(0.34, side * 0.07 * g), at(0.02, side * 0.12), legW, '#20242e');
+    seg(ctx, cam, at(0.3), at(0.4), torsoW * 1.02, p.shorts);
+    seg(ctx, cam, at(0.38), at(0.62), torsoW, p.jersey);
     for (const side of [-1, 1]) {
       const hand = at(1, side * 0.1);
-      seg(ctx, cam, at(0.6, side * 0.08), hand, 0.12, p.jersey);
-      dot(ctx, cam, hand, 0.1, PAL.glove);
+      seg(ctx, cam, at(0.6, side * 0.08), hand, armW, p.jerseyDark);
+      dot(ctx, cam, hand, 0.1, p.gloves);
     }
-    head = dot(ctx, cam, at(0.72, 0.2), 0.2, p.skin);
+    head = dot(ctx, cam, at(0.72, 0.18 + headR * 0.2), headR, p.skin);
   }
   drawFace(ctx, head.x, head.y, head.r, p, face);
   ctx.restore();
-  return { x: head.x, y: head.y - head.r };
+  return { x: head.x, y: head.y - head.r * 1.2 };
 }
 
-/** 脸：发型、眼睛、嘴，按表情画。头像和球场上的门将共用。 */
+/** 发型：盖在脸上面的部分。 */
+function drawHairTop(ctx: Canvas2D, x: number, y: number, r: number, p: Look): void {
+  ctx.fillStyle = p.hair;
+  switch (p.hairStyle) {
+    case 'bald':
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.beginPath();
+      ctx.ellipse(x - r * 0.35, y - r * 0.55, r * 0.22, r * 0.12, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    case 'buzz':
+      ctx.globalAlpha *= 0.75;
+      ctx.beginPath();
+      ctx.arc(x, y - r * 0.05, r * 1.01, Math.PI * 1.08, Math.PI * 1.92);
+      ctx.quadraticCurveTo(x, y - r * 0.62, x - r * 0.98, y - r * 0.32);
+      ctx.fill();
+      ctx.globalAlpha /= 0.75;
+      return;
+    case 'spiky':
+      ctx.beginPath();
+      ctx.moveTo(x - r * 1.0, y - r * 0.2);
+      for (let i = 0; i <= 6; i++) {
+        const a = Math.PI * (1.05 + (i / 6) * 0.9);
+        const rr = i % 2 ? r * 1.0 : r * 1.38;
+        ctx.lineTo(x + Math.cos(a) * rr, y - r * 0.1 + Math.sin(a) * rr);
+      }
+      ctx.lineTo(x + r * 1.0, y - r * 0.2);
+      ctx.quadraticCurveTo(x, y - r * 0.55, x - r * 1.0, y - r * 0.2);
+      ctx.fill();
+      return;
+    case 'curly':
+      for (let i = 0; i < 7; i++) {
+        const a = Math.PI * (1.0 + (i / 6) * 1.0);
+        ctx.beginPath();
+        ctx.arc(x + Math.cos(a) * r * 0.85, y - r * 0.1 + Math.sin(a) * r * 0.85, r * 0.34, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    case 'mohawk':
+      ctx.beginPath();
+      ctx.moveTo(x - r * 0.18, y - r * 0.85);
+      ctx.lineTo(x - r * 0.1, y - r * 1.55);
+      ctx.lineTo(x + r * 0.12, y - r * 1.45);
+      ctx.lineTo(x + r * 0.2, y - r * 0.85);
+      ctx.fill();
+      ctx.globalAlpha *= 0.4;
+      ctx.beginPath();
+      ctx.arc(x, y - r * 0.05, r * 1.0, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.fill();
+      ctx.globalAlpha /= 0.4;
+      return;
+    default:
+      // short / long / ponytail 的顶部
+      ctx.beginPath();
+      ctx.arc(x, y - r * 0.12, r * 1.03, Math.PI * 1.05, Math.PI * 1.95);
+      ctx.quadraticCurveTo(x, y - r * 0.5, x - r * 1.0, y - r * 0.15);
+      ctx.fill();
+  }
+}
+
+/** 发型：在脸后面的部分（长发、马尾）。 */
+function drawHairBack(ctx: Canvas2D, x: number, y: number, r: number, p: Look): void {
+  ctx.fillStyle = p.hair;
+  if (p.hairStyle === 'long') {
+    roundRectPath(ctx, x - r * 1.12, y - r * 0.6, r * 2.24, r * 1.75, r * 0.6);
+    ctx.fill();
+  } else if (p.hairStyle === 'ponytail') {
+    ctx.beginPath();
+    ctx.ellipse(x + r * 1.05, y - r * 0.1, r * 0.32, r * 0.55, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawHeadgear(ctx: Canvas2D, x: number, y: number, r: number, p: Look): void {
+  if (p.headgear === 'cap') {
+    ctx.fillStyle = p.jerseyDark;
+    ctx.beginPath();
+    ctx.arc(x, y - r * 0.25, r * 1.02, Math.PI, 0);
+    ctx.fill();
+    roundRectPath(ctx, x - r * 0.2, y - r * 0.38, r * 1.45, r * 0.24, r * 0.12);
+    ctx.fill();
+  } else if (p.headgear === 'headband') {
+    ctx.fillStyle = p.jersey;
+    roundRectPath(ctx, x - r * 1.0, y - r * 0.58, r * 2.0, r * 0.26, r * 0.1);
+    ctx.fill();
+  } else if (p.headgear === 'beanie') {
+    ctx.fillStyle = p.jerseyDark;
+    ctx.beginPath();
+    ctx.arc(x, y - r * 0.3, r * 1.04, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = p.jersey;
+    roundRectPath(ctx, x - r * 1.05, y - r * 0.42, r * 2.1, r * 0.3, r * 0.12);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x, y - r * 1.38, r * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** 脸：发型、帽子、眼睛、嘴、胡子眼镜，按表情画。头像和球场上的人物共用。 */
 export function drawFace(ctx: Canvas2D, x: number, y: number, r: number, p: Look, face: Face): void {
   ctx.save();
+  drawHairBack(ctx, x, y, r, p);
   ctx.fillStyle = p.skin;
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
-  // 头发
-  ctx.fillStyle = p.hair;
-  ctx.beginPath();
-  ctx.arc(x, y - r * 0.12, r * 1.03, Math.PI * 1.05, Math.PI * 1.95);
-  ctx.quadraticCurveTo(x, y - r * 0.5, x - r * 1.0, y - r * 0.15);
-  ctx.fill();
+  if (p.extra === 'beard') {
+    ctx.fillStyle = p.hair;
+    ctx.globalAlpha *= 0.85;
+    ctx.beginPath();
+    ctx.arc(x, y + r * 0.1, r * 0.98, Math.PI * 0.05, Math.PI * 0.95);
+    ctx.quadraticCurveTo(x, y + r * 0.45, x + r * 0.97, y + r * 0.25);
+    ctx.fill();
+    ctx.globalAlpha /= 0.85;
+  }
+  drawHairTop(ctx, x, y, r, p);
+  drawHeadgear(ctx, x, y, r, p);
   const lw = Math.max(1, r * 0.13);
   ctx.strokeStyle = '#1b1f2e';
   ctx.fillStyle = '#1b1f2e';
@@ -419,6 +530,19 @@ export function drawFace(ctx: Canvas2D, x: number, y: number, r: number, p: Look
       ctx.fill();
     }
   }
+  if (p.extra === 'glasses') {
+    ctx.lineWidth = Math.max(1, r * 0.08);
+    for (const dx of [-0.38, 0.38]) {
+      ctx.beginPath();
+      ctx.arc(x + dx * r, eyeY, r * 0.24, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.14, eyeY);
+    ctx.lineTo(x + r * 0.14, eyeY);
+    ctx.stroke();
+    ctx.lineWidth = lw;
+  }
   // 眉毛
   if (face === 'ready' || face === 'smug') {
     for (const dx of [-0.38, 0.38]) {
@@ -428,25 +552,33 @@ export function drawFace(ctx: Canvas2D, x: number, y: number, r: number, p: Look
       ctx.stroke();
     }
   }
+  if (p.extra === 'mustache') {
+    ctx.fillStyle = p.hair;
+    ctx.beginPath();
+    ctx.ellipse(x - r * 0.15, y + r * 0.33, r * 0.2, r * 0.08, 0.2, 0, Math.PI * 2);
+    ctx.ellipse(x + r * 0.15, y + r * 0.33, r * 0.2, r * 0.08, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1b1f2e';
+  }
   ctx.beginPath();
   if (face === 'smug') {
     ctx.arc(x + r * 0.08, y + r * 0.32, r * 0.3, Math.PI * 0.05, Math.PI * 0.8);
     ctx.stroke();
   } else if (face === 'shock') {
-    ctx.ellipse(x, y + r * 0.45, r * 0.15, r * 0.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y + r * 0.47, r * 0.15, r * 0.2, 0, 0, Math.PI * 2);
     ctx.fill();
   } else if (face === 'sad') {
-    ctx.arc(x, y + r * 0.62, r * 0.22, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.arc(x, y + r * 0.66, r * 0.22, Math.PI * 1.15, Math.PI * 1.85);
     ctx.stroke();
   } else {
-    ctx.moveTo(x - r * 0.2, y + r * 0.45);
-    ctx.lineTo(x + r * 0.2, y + r * 0.45);
+    ctx.moveTo(x - r * 0.2, y + r * 0.5);
+    ctx.lineTo(x + r * 0.2, y + r * 0.5);
     ctx.stroke();
   }
   ctx.restore();
 }
 
-/** 头像：圆形底 + 肩膀 + 脸（气泡和换门将的卡片用）。 */
+/** 头像：圆形底 + 肩膀 + 脸（气泡、卡片、选人列表用）。 */
 export function drawAvatar(ctx: Canvas2D, x: number, y: number, r: number, p: Look, face: Face, num = '1'): void {
   ctx.save();
   ctx.beginPath();
@@ -462,7 +594,121 @@ export function drawAvatar(ctx: Canvas2D, x: number, y: number, r: number, p: Lo
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(num, x, y + r * 0.78);
-  drawFace(ctx, x, y - r * 0.08, r * 0.55, p, face);
+  drawFace(ctx, x, y - r * 0.05, r * 0.5, p, face);
+  ctx.restore();
+}
+
+// ---------- 球鞋和踢球的腿 ----------
+
+export interface BootLook {
+  color: string;
+  accent: string;
+}
+
+/** 从后面看的一只球鞋（鞋尖朝上），中心在 (x, y)，angle 是转角。 */
+function bootTop(ctx: Canvas2D, x: number, y: number, r: number, angle: number, b: BootLook): void {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  roundRectPath(ctx, -r * 0.55, -r * 1.25, r * 1.1, r * 2.5, [r * 0.55, r * 0.55, r * 0.4, r * 0.4]);
+  ctx.fillStyle = '#20242e';
+  ctx.fill();
+  roundRectPath(ctx, -r * 0.48, -r * 1.2, r * 0.96, r * 2.3, [r * 0.5, r * 0.5, r * 0.35, r * 0.35]);
+  ctx.fillStyle = b.color;
+  ctx.fill();
+  ctx.strokeStyle = b.accent;
+  ctx.lineWidth = r * 0.22;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.45, r * 0.1);
+  ctx.lineTo(r * 0.45, -r * 0.4);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  for (let i = 0; i < 3; i++) ctx.fillRect(-r * 0.18, -r * 0.6 + i * r * 0.32, r * 0.36, r * 0.08);
+  ctx.restore();
+}
+
+/**
+ * 罚球的那条腿：等着射门时脚踩在球旁边；踢的时候 k 从 0 走到 1：往后摆、踢到球、往前送。
+ * side：-1 左脚，1 右脚。
+ */
+export function drawKickLeg(ctx: Canvas2D, ball: { x: number; y: number; r: number }, side: -1 | 1, boot: BootLook, sock: string, k: number): void {
+  const r = ball.r;
+  const rest = { x: ball.x + side * r * 1.7, y: ball.y + r * 1.7 };
+  const back = { x: ball.x + side * r * 1.5, y: ball.y + r * 3.3 };
+  const hit = { x: ball.x + side * r * 0.45, y: ball.y + r * 0.9 };
+  const follow = { x: ball.x - side * r * 0.9, y: ball.y - r * 2.6 };
+  let p = rest;
+  let angle = -side * 0.25;
+  let alpha = 1;
+  if (k > 0) {
+    const lerp = (a: { x: number; y: number }, b: { x: number; y: number }, t: number): { x: number; y: number } => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    if (k < 0.35) p = lerp(rest, back, k / 0.35);
+    else if (k < 0.55) p = lerp(back, hit, (k - 0.35) / 0.2);
+    else {
+      p = lerp(hit, follow, (k - 0.55) / 0.45);
+      alpha = 1 - (k - 0.55) / 0.45;
+    }
+    angle = -side * (0.25 - k * 0.5);
+  }
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // 小腿：从下面伸过来，越往下越淡（像镜头只拍到脚）
+  const hip = { x: ball.x + side * r * 3.6, y: p.y + r * 8 };
+  const ctrl = { x: p.x + side * r * 1.4, y: p.y + r * 3.8 };
+  ctx.lineCap = 'round';
+  const steps = 14;
+  let prev = { x: p.x, y: p.y + r * 0.8 };
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = (1 - t) * (1 - t) * (p.x) + 2 * (1 - t) * t * ctrl.x + t * t * hip.x;
+    const y = (1 - t) * (1 - t) * (p.y + r * 0.8) + 2 * (1 - t) * t * ctrl.y + t * t * hip.y;
+    ctx.globalAlpha = alpha * Math.max(0, 1 - t * 1.1);
+    ctx.strokeStyle = sock;
+    ctx.lineWidth = r * (1.1 + t * 0.6);
+    ctx.beginPath();
+    ctx.moveTo(prev.x, prev.y);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    prev = { x, y };
+  }
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = r * 0.25;
+  ctx.beginPath();
+  ctx.moveTo(p.x - r * 0.55, p.y + r * 1.4);
+  ctx.lineTo(p.x + r * 0.55, p.y + r * 1.4);
+  ctx.stroke();
+  bootTop(ctx, p.x, p.y, r * 0.95, angle, boot);
+  ctx.restore();
+}
+
+/** 侧面看的一只球鞋（选球鞋的列表用）。 */
+export function drawBootSide(ctx: Canvas2D, x: number, y: number, w: number, b: BootLook): void {
+  const h = w * 0.42;
+  ctx.save();
+  ctx.translate(x - w / 2, y - h / 2);
+  ctx.beginPath();
+  ctx.moveTo(0, h * 0.35);
+  ctx.quadraticCurveTo(w * 0.05, 0, w * 0.3, h * 0.05);
+  ctx.lineTo(w * 0.55, h * 0.25);
+  ctx.quadraticCurveTo(w * 0.95, h * 0.35, w, h * 0.75);
+  ctx.lineTo(w, h * 0.85);
+  ctx.lineTo(0, h * 0.85);
+  ctx.closePath();
+  ctx.fillStyle = b.color;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.strokeStyle = b.accent;
+  ctx.lineWidth = h * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.25, h * 0.7);
+  ctx.lineTo(w * 0.62, h * 0.35);
+  ctx.stroke();
+  ctx.fillStyle = '#20242e';
+  ctx.fillRect(0, h * 0.85, w, h * 0.12);
+  for (let i = 0; i < 4; i++) ctx.fillRect(w * (0.1 + i * 0.25), h * 0.95, w * 0.07, h * 0.12);
   ctx.restore();
 }
 

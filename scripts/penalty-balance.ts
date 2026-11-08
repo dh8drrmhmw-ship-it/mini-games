@@ -3,7 +3,7 @@
  * 运行：node scripts/penalty-balance.ts
  */
 import { Rng } from '../src/games/shared/rng.ts';
-import { chooseGuess, chooseTell, freqModel, isGoal, PERSONAS, personaFor, resolveShot, type Persona } from '../src/games/penalty/keeper.ts';
+import { chooseGuess, chooseTell, freqModel, GOALS_TO_CLEAR, isGoal, LIVES, PERSONAS, resolveShot, type Persona } from '../src/games/penalty/keeper.ts';
 import { gauss, SHOT_TIME_FAST, SHOT_TIME_SLOW, zoneCol, zoneOf, zoneRow, ZONES, type Shot, type Zone } from '../src/games/penalty/world.ts';
 
 export type Strategy = 'random' | 'human' | 'repeat' | 'anti';
@@ -83,12 +83,11 @@ export function successRate(p: Persona, strategy: Strategy, shots: number, seed:
   return { goal: goal / shots, save: save / shots, miss: miss / shots };
 }
 
-/** 一整局：3 次机会，按进球数换门将，返回进了几个。 */
-export function simulateRun(strategy: Strategy, rng: Rng, history: Zone[]): number {
+/** 闯一关：进够 GOALS_TO_CLEAR 个就过，失误 LIVES 次就输。 */
+export function simulateStage(p: Persona, strategy: Strategy, rng: Rng, history: Zone[]): boolean {
   let goals = 0;
-  let lives = 3;
-  while (lives > 0 && goals < 200) {
-    const p = PERSONAS[personaFor(goals)]!;
+  let lives = LIVES;
+  while (lives > 0 && goals < GOALS_TO_CLEAR) {
     const guess = chooseGuess(p, history, rng);
     const lean = chooseTell(p, guess, rng);
     const intended = pickZone(strategy, history, rng);
@@ -100,16 +99,16 @@ export function simulateRun(strategy: Strategy, rng: Rng, history: Zone[]): numb
     history.push(shot.zone);
     if (history.length > 60) history.shift();
   }
-  return goals;
+  return goals >= GOALS_TO_CLEAR;
 }
 
-export function runStats(strategy: Strategy, runs: number, seed: number): { mean: number; median: number; p90: number } {
+/** 每一关第一次就过的概率。 */
+export function passRate(p: Persona, strategy: Strategy, tries: number, seed: number): number {
   const rng = new Rng(seed);
   const history: Zone[] = [];
-  const xs: number[] = [];
-  for (let i = 0; i < runs; i++) xs.push(simulateRun(strategy, rng, history));
-  xs.sort((a, b) => a - b);
-  return { mean: xs.reduce((a, b) => a + b, 0) / runs, median: xs[Math.floor(runs / 2)]!, p90: xs[Math.floor(runs * 0.9)]! };
+  let pass = 0;
+  for (let i = 0; i < tries; i++) if (simulateStage(p, strategy, rng, history)) pass++;
+  return pass / tries;
 }
 
 if (import.meta.main) {
@@ -122,9 +121,9 @@ if (import.meta.main) {
     });
     console.log(p.name.padEnd(8), row.join(''));
   }
-  console.log('\n一整局（3 次机会）进球数：');
-  for (const s of strategies) {
-    const r = runStats(s, 1500, 11);
-    console.log(s.padEnd(8), `平均 ${r.mean.toFixed(1)}  中位 ${r.median}  前一成 ${r.p90}`);
+  console.log('\n每关一次过的概率：');
+  for (const p of PERSONAS) {
+    const row = strategies.map((st) => `${(passRate(p, st, 1500, 11) * 100).toFixed(0)}%`.padStart(8)).join('');
+    console.log(p.name.padEnd(8), row);
   }
 }

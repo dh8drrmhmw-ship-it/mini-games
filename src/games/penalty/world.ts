@@ -112,6 +112,8 @@ export interface Shot {
   bend: number;
   /** 划得太短，球软绵绵地滚过去 */
   weak: boolean;
+  /** 勺子：往中间轻轻挑起来的高吊球 */
+  chip?: boolean;
 }
 
 /** 罚球球员的三项能力（1～5），见 players.ts。 */
@@ -119,6 +121,10 @@ export interface Kicker {
   power: number;
   accuracy: number;
   curve: number;
+  /** 顺脚的弧线方向：1 = 往右鼓（右脚内脚背），-1 = 往左鼓（左脚），0 = 两边都顺 */
+  curveSide: 1 | -1 | 0;
+  /** 会不会踢勺子 */
+  chip?: boolean;
 }
 
 export const SHOT_TIME_FAST = 0.42;
@@ -127,32 +133,28 @@ export const SHOT_TIME_SLOW = 0.85;
 export type SwipeProblem = 'short' | 'down';
 
 /**
- * 松手前最后一小段划得多快（每秒划过几个「球到门线」的距离）。
- * 手指一停就抬起来时，最后那个「抬起」的点和前一个点在同一个地方，不算停顿；
- * 真的停住一会儿（超过 0.06 秒）再松手，就是轻推。
+ * 这一划最快的时候有多快（每秒划过几个「球到门线」的距离）。
+ * 看整个过程里最快的一小段（0.08 秒），所以画弧线时最后手指慢下来也没关系。
  */
-export function releaseSpeed(points: Swipe['points'], toGoal: number): number {
-  const n = points.length;
-  let end = n - 1;
-  if (n >= 3) {
-    const a = points[n - 1]!;
-    const b = points[n - 2]!;
-    if (Math.hypot(a.x - b.x, a.y - b.y) < 2 && a.t - b.t < 0.06) end = n - 2;
+export function swipeSpeed(points: Swipe['points'], toGoal: number): number {
+  let best = 0;
+  let j = 0;
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i]!;
+    while (j < i - 1 && p.t - points[j]!.t > 0.08) j++;
+    const q = points[j]!;
+    const dt = Math.max(1 / 60, p.t - q.t);
+    best = Math.max(best, Math.hypot(p.x - q.x, p.y - q.y) / dt);
   }
-  const last = points[end]!;
-  let j = end;
-  while (j > 0 && last.t - points[j - 1]!.t <= 0.12) j--;
-  if (j === end) j = Math.max(0, end - 1);
-  const p = points[j]!;
-  const dt = Math.max(1 / 60, last.t - p.t);
-  return Math.hypot(last.x - p.x, last.y - p.y) / toGoal / dt;
+  return best / toGoal;
 }
 
 /**
  * 手指划的一下 → 射门：
  * - 落点：手指从球出发划到球门里哪一点，球就飞向哪一点；没划到球门线的高度是贴地球。
  * - 弧线：球一开始沿着你最开始划的方向飞，最后拐到落点。先往左划再拐到右边，就是往右拐的弧线球。
- * - 力量：看松手那一下划得多快。越快球越快，但越容易偏。
+ * - 力量：看这一划最快的时候有多快。越快球越快，但越容易偏。
+ * - 弧线有顺逆：右脚顺的是「先往右再拐回左」，反方向只能弯一点、还更容易偏。
  */
 export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng, kicker: Kicker): Shot | SwipeProblem {
   const pts = swipe.points;
@@ -181,28 +183,37 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   const weak = lift < 0.45;
 
   // 力量
-  const speed = releaseSpeed(pts, toGoal);
+  const speed = swipeSpeed(pts, toGoal);
   const power = weak ? 0 : clamp01((speed - 2) / (7.5 - 2));
   const fastest = 0.52 - 0.035 * (kicker.power - 1);
   const time = weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - fastest) * power;
 
   // 弧线：最开始划的方向（离起点一小段距离的那一点）延长到球门线
   let bend = 0;
+  let outside = false;
   if (!weak) {
     const launch = pts.find((p) => Math.hypot(p.x - a.x, p.y - a.y) >= toGoal * 0.35) ?? b;
     const ly = launch.y - a.y;
     if (ly < -4) {
       const x0 = unprojectGoalPlane(cam, ball.x + (launch.x - a.x) * (toGoal / -ly), goalLine).x;
       // 球的横向位置 x(u) = 落点 × u + 弧线 × 4u(1-u)，一开始的方向是 落点 + 4 × 弧线
-      const limit = 0.35 + 0.3 * (kicker.curve - 1);
-      bend = clamp((x0 - aimX) / 4, -limit, limit);
+      const raw = (x0 - aimX) / 4;
+      const against = kicker.curveSide !== 0 && Math.sign(raw) === -kicker.curveSide;
+      const limit = (0.35 + 0.3 * (kicker.curve - 1)) * (against ? 0.4 : 1);
+      bend = clamp(raw, -limit, limit);
+      outside = against;
     }
   }
 
   // 脚下的偏差：越用力越不准，弧线越大越不准，球员越准偏得越少
-  const sd = (0.05 + 0.3 * power * power) * (1.45 - 0.2 * (kicker.accuracy - 1)) + Math.abs(bend) * 0.06;
+  const sd = (0.05 + 0.3 * power * power) * (1.45 - 0.2 * (kicker.accuracy - 1)) + Math.abs(bend) * (outside ? 0.25 : 0.06);
   const tx = aimX + gauss(rng) * sd;
   const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
+
+  // 勺子：会踢勺子的球员，往中间偏上轻轻一挑
+  if (kicker.chip && !weak && power < 0.25 && Math.abs(aimX) < 1.4 && aimY >= 0.6) {
+    return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power, time: 1.0, bend: 0, weak, chip: true };
+  }
 
   return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak };
 }
@@ -232,7 +243,7 @@ export function gauss(rng: Rng): number {
 export function ballAt(shot: Shot, t: number): { x: number; y: number; z: number } {
   const u = clamp01(t / shot.time);
   const bump = 4 * u * (1 - u);
-  const arc = shot.weak ? 0 : 0.12 + (1 - shot.power) * 0.35;
+  const arc = shot.chip ? 1.3 : shot.weak ? 0 : 0.12 + (1 - shot.power) * 0.35;
   return {
     x: shot.tx * u + shot.bend * bump,
     y: Math.max(BALL_R, BALL_R + (shot.ty - BALL_R) * u + arc * bump),
