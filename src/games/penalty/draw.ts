@@ -85,11 +85,31 @@ export function drawPitch(ctx: Canvas2D, cam: Camera, view: View): void {
   const far = project(cam, 0, 0, -6).y;
   ctx.fillStyle = PAL.grassFar;
   ctx.fillRect(0, far, W, H - far);
-  for (let z = -6, k = 0; z < cam.z - 0.5; z += 1.6, k++) {
-    const y1 = project(cam, 0, 0, z).y;
-    const y2 = project(cam, 0, 0, Math.min(cam.z - 0.5, z + 1.6)).y;
+  // 割草条纹：一条条和球门线平行；镜头斜着看时条纹也是斜的
+  const edge = (z: number): [number, number] => {
+    const sin = Math.sin(cam.yaw);
+    const cos = Math.cos(cam.yaw);
+    const ahead = (cam.z - z) / Math.max(0.2, cos);
+    const cxw = cam.x + sin * ahead;
+    const a = project(cam, cxw - 0.5, 0, z);
+    const b = project(cam, cxw + 0.5, 0, z);
+    const k = (b.y - a.y) / (b.x - a.x || 1);
+    return [a.y + k * (-20 - a.x), a.y + k * (W + 20 - a.x)];
+  };
+  const last = cam.z - 1.5;
+  for (let z = -6, k = 0; z < last; z += 1.6, k++) {
+    const z2 = Math.min(last, z + 1.6);
+    const [l1, r1] = edge(z);
+    // 最近的一截一直铺到屏幕底
+    const [l2, r2] = z2 >= last ? [H + 20, H + 20] : edge(z2);
     ctx.fillStyle = k % 2 ? PAL.grassA : PAL.grassB;
-    ctx.fillRect(0, y1, W, Math.max(1, y2 - y1) + 0.5);
+    ctx.beginPath();
+    ctx.moveTo(-20, l1);
+    ctx.lineTo(W + 20, r1);
+    ctx.lineTo(W + 20, Math.max(r2, r1 + 1) + 0.5);
+    ctx.lineTo(-20, Math.max(l2, l1 + 1) + 0.5);
+    ctx.closePath();
+    ctx.fill();
   }
   // 远处压暗一点，像夜里的灯光照不到
   const shade = ctx.createLinearGradient(0, far, 0, project(cam, 0, 0, 6).y);
@@ -595,6 +615,126 @@ export function drawAvatar(ctx: Canvas2D, x: number, y: number, r: number, p: Lo
   ctx.textBaseline = 'middle';
   ctx.fillText(num, x, y + r * 0.78);
   drawFace(ctx, x, y - r * 0.05, r * 0.5, p, face);
+  ctx.restore();
+}
+
+// ---------- 人墙 ----------
+
+const DEF_SKIN = ['#f1c7a0', '#c98e62', '#8a5a3c', '#e8b48c', '#a8714a'];
+const DEF_HAIR = ['#2a1d14', '#121212', '#5a3a22', '#c9a15a', '#1a1a1a'];
+
+export interface WallLook {
+  jersey: string;
+  jerseyDark: string;
+  shorts: string;
+}
+
+/**
+ * 人墙：几个防守球员并排站，双手护在身前，面朝罚球的人。
+ * people：每人脚下的位置；tangent：沿着人墙的方向；jump：0～1，跳起来多高（最高 0.42 米）。
+ */
+export function drawWall(ctx: Canvas2D, cam: Camera, people: readonly { x: number; z: number }[], tangent: { x: number; z: number }, jump: number, look: WallLook): void {
+  ctx.save();
+  // 裁判喷的白线（人墙不能往前站）
+  if (people.length > 0) {
+    const first = people[0]!;
+    const lastP = people[people.length - 1]!;
+    const a = project(cam, first.x - tangent.x * 0.5, 0, first.z - tangent.z * 0.5);
+    const b = project(cam, lastP.x + tangent.x * 0.5, 0, lastP.z + tangent.z * 0.5);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = Math.max(1.5, a.s * 0.06);
+    ctx.lineCap = 'round';
+    ctx.setLineDash([a.s * 0.08, a.s * 0.05]);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  const order = people.map((p, i) => ({ ...p, i, s: project(cam, p.x, 0, p.z).s })).sort((a, b) => a.s - b.s);
+  for (const m of order) {
+    const g = project(cam, m.x, 0, m.z);
+    const s = g.s;
+    const tall = 1 + ((m.i * 37) % 5) * 0.02 - 0.04;
+    const lift = jump * 0.42 * s;
+    const x = g.x;
+    const y0 = g.y - lift;
+    // 影子
+    ctx.fillStyle = `rgba(0,0,0,${0.3 * (1 - jump * 0.5)})`;
+    ctx.beginPath();
+    ctx.ellipse(x, g.y, s * 0.28 * (1 - jump * 0.3), s * 0.07, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const up = (k: number): number => y0 - k * s * tall;
+    ctx.lineCap = 'round';
+    // 腿：大腿露肉，小腿是球袜，脚下是球鞋
+    for (const side of [-1, 1]) {
+      const spread = side * (0.09 + jump * 0.03) * s;
+      ctx.strokeStyle = DEF_SKIN[m.i % DEF_SKIN.length]!;
+      ctx.lineWidth = 0.13 * s;
+      ctx.beginPath();
+      ctx.moveTo(x + side * 0.08 * s, up(0.66));
+      ctx.lineTo(x + spread, up(0.4));
+      ctx.stroke();
+      ctx.strokeStyle = look.jersey;
+      ctx.lineWidth = 0.125 * s;
+      ctx.beginPath();
+      ctx.moveTo(x + spread, up(0.42));
+      ctx.lineTo(x + spread, up(0.06));
+      ctx.stroke();
+      ctx.fillStyle = '#20242e';
+      ctx.beginPath();
+      ctx.ellipse(x + spread, up(0.03), 0.08 * s, 0.045 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 短裤和球衣
+    ctx.fillStyle = look.shorts;
+    roundRectPath(ctx, x - 0.2 * s, up(0.97), 0.4 * s, 0.34 * s * tall, 0.06 * s);
+    ctx.fill();
+    ctx.fillStyle = look.jersey;
+    roundRectPath(ctx, x - 0.22 * s, up(1.5), 0.44 * s, 0.6 * s * tall, 0.1 * s);
+    ctx.fill();
+    ctx.fillStyle = look.jerseyDark;
+    ctx.fillRect(x - 0.22 * s, up(1.0), 0.44 * s, 0.05 * s);
+    // 双手护在身前
+    ctx.strokeStyle = look.jersey;
+    ctx.lineWidth = 0.1 * s;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(x + side * 0.21 * s, up(1.44));
+      ctx.lineTo(x + side * 0.2 * s, up(1.22));
+      ctx.stroke();
+    }
+    ctx.strokeStyle = DEF_SKIN[m.i % DEF_SKIN.length]!;
+    ctx.lineWidth = 0.085 * s;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(x + side * 0.2 * s, up(1.22));
+      ctx.lineTo(x - side * 0.03 * s, up(0.9));
+      ctx.stroke();
+    }
+    // 头
+    const hr = 0.12 * s;
+    const hy = up(1.64);
+    ctx.fillStyle = DEF_SKIN[m.i % DEF_SKIN.length]!;
+    ctx.beginPath();
+    ctx.arc(x, hy, hr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = DEF_HAIR[(m.i * 3) % DEF_HAIR.length]!;
+    ctx.beginPath();
+    ctx.arc(x, hy - hr * 0.1, hr * 1.02, Math.PI * 1.05, Math.PI * 1.95);
+    ctx.fill();
+    // 眼睛：跳起来时闭眼
+    ctx.fillStyle = '#20242e';
+    if (jump > 0.3) {
+      ctx.fillRect(x - hr * 0.5, hy + hr * 0.05, hr * 0.32, hr * 0.1);
+      ctx.fillRect(x + hr * 0.18, hy + hr * 0.05, hr * 0.32, hr * 0.1);
+    } else {
+      ctx.beginPath();
+      ctx.arc(x - hr * 0.35, hy + hr * 0.1, hr * 0.12, 0, Math.PI * 2);
+      ctx.arc(x + hr * 0.35, hy + hr * 0.1, hr * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   ctx.restore();
 }
 

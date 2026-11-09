@@ -7,6 +7,7 @@
  * 门将不会偷看你这一脚的方向：他在你射门前就猜好了，球踢出去以后只能稍微调整。
  */
 import type { Rng } from '../shared/rng.ts';
+import type { Wall, WallCheck } from './freekick.ts';
 import type { Look } from './look.ts';
 import { BALL_R, GOAL_H, HALF_W, POST_R, ZONE_NAMES, ZONES, zoneCol, zoneReach, type Shot, type Zone } from './world.ts';
 
@@ -49,6 +50,8 @@ export interface Persona extends Look {
   range: number;
   /** 这一关的风最大有多大（米/秒，0 = 没风）：风会把球往一边吹 */
   wind: number;
+  /** 这一关依次罚什么：'pen' 是点球，其他是任意球的位置（见 freekick.ts），罚完一轮从头再来 */
+  shots: readonly string[];
   /** 射门前挑衅的概率，以及挑衅时说真话的概率 */
   taunt: number;
   truth: number;
@@ -88,6 +91,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.16, dive: 0.55, adjust: 0.25, reach: 0.34,
     tell: 0.65, fakeTell: 0, taunt: 0, truth: 1,
     wait: 0, range: 2.0, wind: 0,
+    shots: ['pen'],
     lines: {
       save: ['我、我扑到了？！', '妈妈我扑到了！', '运气，是运气！'],
       goal: ['呜……', '太快了看不清', '下次我一定行'],
@@ -104,6 +108,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.12, dive: 0.5, adjust: 0.3, reach: 0.4,
     tell: 0.4, fakeTell: 0, taunt: 0.2, truth: 0.8,
     wait: 0.15, range: 2.35, wind: 0,
+    shots: ['pen', 'pen', 'c20'],
     lines: {
       save: ['够得着～', '手长没办法', '低头？我懒得低'],
       goal: ['腰……我的腰', '太低了！', '下次我蹲着'],
@@ -120,6 +125,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.08, dive: 0.44, adjust: 0.5, reach: 0.37,
     tell: 0.3, fakeTell: 0.05, taunt: 0.3, truth: 0.6,
     wait: 0.35, range: 2.2, wind: 0,
+    shots: ['pen', 'l22', 'pen', 'c20'],
     lines: {
       save: ['太慢了。', '这球我闭着眼都能扑', '喵～'],
       goal: ['下一个我一定扑到', '有点东西', '哼'],
@@ -137,6 +143,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.13, dive: 0.52, adjust: 0.4, reach: 0.55,
     tell: 0.25, fakeTell: 0.05, taunt: 0.3, truth: 0.7,
     wait: 0.35, range: 1.95, wind: 3,
+    shots: ['c20', 'pen', 'r24'],
     lines: {
       save: ['撞墙了吧？', '嗯。', '我就站这儿，你随意'],
       goal: ['……跑不动了', '太远了够不着', '给我等着'],
@@ -153,6 +160,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.05, dive: 0.33, adjust: 0.62, reach: 0.33,
     tell: 0.2, fakeTell: 0.1, taunt: 0.35, truth: 0.5,
     wait: 0.35, range: 2.3, wind: 0,
+    shots: ['l22', 'pen', 'r24', 'c27'],
     lines: {
       save: ['嘿！扑到啦！', '我飞起来啦！', '快不快？快不快？'],
       goal: ['哎呀够不着！', '手再长一点就好了', '再来再来！'],
@@ -168,6 +176,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.09, dive: 0.44, adjust: 0.48, reach: 0.4,
     tell: 0.15, fakeTell: 0.15, taunt: 0.4, truth: 0.5,
     wait: 0.2, range: 2.3, wind: 3.5,
+    shots: ['pen', 'c27', 'l22', 'r18'],
     lines: {
       save: ['我就知道你会踢{zone}！', '记住了吧？我可记住你了', '又是这招？'],
       goal: ['我记住了，你给我等着', '这笔账我记下了', '好，很好'],
@@ -184,6 +193,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.07, dive: 0.41, adjust: 0.55, reach: 0.43,
     tell: 0.1, fakeTell: 0.3, taunt: 0.5, truth: 0.4,
     wait: 0.3, range: 2.35, wind: 0,
+    shots: ['r24', 'pen', 'l30', 'c20'],
     lines: {
       save: ['你想踢{zone}，我早就看到了', '套路，都是套路', '下一脚我也知道'],
       goal: ['有点意思……', '这一脚，我没算到', '你变了'],
@@ -200,6 +210,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.07, dive: 0.4, adjust: 0.55, reach: 0.42,
     tell: 0.05, fakeTell: 0.35, taunt: 0.9, truth: 0.3,
     wait: 0.25, range: 2.35, wind: 4,
+    shots: ['c27', 'r18', 'pen', 'l22'],
     lines: {
       save: ['我说什么来着？我说什么来着！', '早告诉你了嘛', '{zone}！我就知道！'],
       goal: ['那是我让你的', '刚才那个不算', '我刚才没准备好'],
@@ -216,6 +227,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.05, dive: 0.39, adjust: 0.65, reach: 0.45,
     tell: 0.05, fakeTell: 0.25, taunt: 0.15, truth: 0.5,
     wait: 0.4, range: 2.4, wind: 3,
+    shots: ['l30', 'r24', 'pen', 'c27', 'r18'],
     lines: {
       save: ['……', '不行。', '下一个。'],
       goal: ['……嗯。', '还行。', '再来。'],
@@ -232,6 +244,7 @@ export const PERSONAS: readonly Persona[] = [
     reaction: 0.05, dive: 0.37, adjust: 0.72, reach: 0.47,
     tell: 0.05, fakeTell: 0.3, taunt: 0.35, truth: 0.4,
     wait: 0.4, range: 2.45, wind: 4.5,
+    shots: ['c27', 'pen', 'r18', 'l30', 'pen'],
     lines: {
       save: ['这里不让进。', '还有吗？', '{zone}？太明显了'],
       goal: ['……运气好而已', '你是第一个', '再来'],
@@ -242,11 +255,12 @@ export const PERSONAS: readonly Persona[] = [
 
 /** 一关要进几个球，有几次机会。 */
 export const GOALS_TO_CLEAR = 5;
-export const LIVES = 3;
+export const LIVES = 4;
 
-/** 过关拿几颗星：剩下的机会越多，星越多。 */
+/** 过关拿几颗星：一次没失误三颗，失误一次两颗，再多就一颗。 */
 export function starsFor(livesLeft: number): number {
-  return Math.max(1, Math.min(3, livesLeft));
+  const misses = LIVES - livesLeft;
+  return misses <= 0 ? 3 : misses === 1 ? 2 : 1;
 }
 
 /** 门将扑向一个区域时手伸到的位置：高个子够得到上角，下角却要弯腰。 */
@@ -317,20 +331,6 @@ export function chooseGuess(p: Persona, history: readonly Zone[], rng: Rng): Zon
 }
 
 /** 射门前晃一下：-1 往左，1 往右，0 不晃。可能是真的，也可能是假动作。 */
-/**
- * 进阶操作里，助跑的时候门将会不会先动：
- * - early：提前扑向他猜的那边（你看见了就能改方向踢另一边）；
- * - fake：先往反方向晃一步骗你，球踢出去时才扑向他猜的那边；
- * - at：助跑到第几成时动（0～1）。
- * 爱晃的门将常常提前扑；会做假动作的门将常常骗你。等球的门将不会先动。
- */
-export function chooseCommit(p: Persona, rng: Rng): { early: boolean; fake: boolean; at: number } {
-  const r = rng.int(1000) / 1000;
-  const early = r < Math.min(0.75, p.tell + 0.15);
-  const fake = !early && r < Math.min(0.9, p.tell + 0.15 + p.fakeTell * 1.5);
-  return { early, fake, at: 0.4 + rng.int(1000) / 1000 * 0.35 };
-}
-
 /** 这一脚门将是猜，还是站着等球。 */
 export function chooseWait(p: Persona, rng: Rng): boolean {
   return rng.int(1000) < p.wait * 1000;
@@ -348,7 +348,7 @@ export function chooseTell(p: Persona, guess: Zone, rng: Rng): -1 | 0 | 1 {
 
 // ---------- 扑救 ----------
 
-export type Outcome = 'goal' | 'save' | 'post-in' | 'post-out' | 'wide' | 'over';
+export type Outcome = 'goal' | 'save' | 'post-in' | 'post-out' | 'wide' | 'over' | 'wall';
 
 export interface Dive {
   /** 起跳时站的位置（晃过以后会偏一点） */
@@ -370,8 +370,6 @@ export interface ShotOptions {
   lucky?: boolean;
   /** 门将这一脚没猜，站着等球 */
   waiting?: boolean;
-  /** 门将在球踢出去之前多少秒就扑出去了（进阶操作里，助跑时门将可能提前扑） */
-  headStart?: number;
   /** 等球的门将从你划手指的动作里提前看出方向的时间（秒）：划得越犹豫，他越早看出来 */
   read?: number;
 }
@@ -430,10 +428,9 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, o
   let handY = target.y;
   const col = zoneCol(guess);
   const sameSide = col === 1 || Math.sign(shot.tx) === Math.sign(target.x);
-  // 球越慢，门将越来得及调整；弧线球一开始的方向会骗人，调整得少；提前扑出去的门将在空中改不了
+  // 球越慢，门将越来得及调整；弧线球一开始的方向会骗人，调整得少
   const curveTrick = Math.max(0.2, 1 - Math.abs(shot.bend) * 0.4 * (opts.curveTrick ?? 1));
-  const head = opts.headStart ?? 0;
-  const adjust = head > 0.12 ? 0 : (p.adjust * Math.min(1.6, shot.time / 0.6) + (col === 1 ? 0.35 : 0)) * curveTrick;
+  const adjust = (p.adjust * Math.min(1.6, shot.time / 0.6) + (col === 1 ? 0.35 : 0)) * curveTrick;
   if (sameSide) {
     const ddx = shot.tx - handX;
     const ddy = shot.ty - handY;
@@ -443,8 +440,7 @@ export function resolveShot(p: Persona, guess: Zone, lean: number, shot: Shot, o
     handY += ddy * k;
   }
   handY = Math.min(2.35 + (p.height - 1.88), Math.max(0.25, handY));
-  // 提前扑的门将：从他动的那一刻算起，已经扑了 head 秒
-  const progress = head > 0 ? diveProgress(p, shot.time + head + p.reaction) : diveProgress(p, shot.time, late);
+  const progress = diveProgress(p, shot.time, late);
   const dive: Dive = { startX, handX, handY, progressAtBall: progress };
   const res = judge(p, shot, dive, late, opts);
   if (shot.chip && res.outcome !== 'over' && res.outcome !== 'wide' && shot.ty < GOAL_H) {
@@ -472,6 +468,23 @@ function judge(p: Persona, shot: Shot, dive: Dive, late: number, opts: ShotOptio
   if (shot.ty >= GOAL_H) return r('over');
   if (Math.abs(shot.tx) >= HALF_W) return r('wide');
   return r('goal');
+}
+
+/**
+ * 任意球：门将站在人墙挡不住的那一边，看清球才扑（不猜）。
+ * 球从人墙正上方飞过时他被挡住视线，反应更慢；弧线球一开始的方向会骗他。
+ */
+export function resolveFreeKick(p: Persona, shot: Shot, wall: Wall, check: WallCheck, opts: ShotOptions = {}): Resolution {
+  const startX = wall.keeperX;
+  const late = (opts.late ?? 0) + 0.05 + (check.over ? 0.22 : 0) - Math.min(0.2, opts.read ?? 0);
+  const range = p.range + 0.55;
+  const seen = shot.tx + shot.bend * 1.6 * (opts.curveTrick ?? 1);
+  const handX = Math.max(startX - range, Math.min(startX + range, seen));
+  const handY = Math.min(2.25 + (p.height - 1.88), Math.max(0.3, shot.ty));
+  const progress = diveProgress(p, shot.time, late);
+  const dive: Dive = { startX, handX, handY, progressAtBall: progress };
+  if (check.blocked) return { outcome: 'wall', dive: { ...dive, progressAtBall: 0 }, closest: 9, late };
+  return judge(p, shot, dive, late, opts);
 }
 
 export function isGoal(o: Outcome): boolean {
@@ -519,11 +532,20 @@ export function reactionLine(p: Persona, outcome: Outcome, shot: Shot, history: 
     return pickLine(p.lines.save, rng, shot.zone);
   }
   if (outcome === 'post-out') return '谢谢门柱！';
+  if (outcome === 'wall') return ['人墙辛苦了！', '想从人墙中间过？', '人墙也是我的人'][rng.int(3)]!;
   if (outcome === 'wide' || outcome === 'over') return pickLine(p.lines.miss, rng, shot.zone);
   return pickLine(p.lines.goal, rng, shot.zone);
 }
 
 /** 射门前的挑衅（有一半是真话，一半是骗你的）。 */
+/** 任意球前门将说的话（有时候不说）。 */
+export function freeKickTaunt(p: Persona, rng: Rng): string | null {
+  // 爱挑衅的门将任意球前也爱说话
+  if (rng.int(1000) >= Math.max(0.35, p.taunt) * 1000) return null;
+  const options = ['人墙给我站好了！', '这么远，踢得进吗？', '想吊过人墙？试试看', '我盯着远角呢', '人墙后面就是我'];
+  return options[rng.int(options.length)]!;
+}
+
 export function tauntLine(p: Persona, guess: Zone, history: readonly Zone[], rng: Rng): string | null {
   if (p.taunt <= 0 || history.length < 2) return null;
   if (rng.int(1000) >= p.taunt * 1000) return null;

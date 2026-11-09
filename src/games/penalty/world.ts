@@ -40,10 +40,12 @@ export function zoneReach(z: Zone): { x: number; y: number } {
 // ---------- 镜头 ----------
 
 export interface Camera {
-  /** 镜头离球门线的距离（米） */
-  z: number;
-  /** 镜头高度 */
+  /** 镜头的位置（米） */
+  x: number;
   y: number;
+  z: number;
+  /** 朝向：0 是正对球门；镜头在球门右边时往左转 */
+  yaw: number;
   /** 焦距（像素） */
   f: number;
   /** 屏幕上的中线和地平线 */
@@ -51,22 +53,44 @@ export interface Camera {
   horizon: number;
 }
 
+/** 罚球的位置：点球点，或者任意球的位置（x 左右、z 离球门线多远）。 */
+export interface Spot {
+  x: number;
+  z: number;
+}
+
+export const PENALTY_SPOT: Spot = { x: 0, z: SPOT_Z };
+
+export function isPenalty(spot: Spot): boolean {
+  return spot.x === 0 && spot.z === SPOT_Z;
+}
+
 export const CAM_BACK = 4.0;
 /** 镜头比人高一些，像站在罚球的人身后、稍微往下看：球和球门在屏幕上拉得更开，好瞄准。 */
 export const CAM_Y = 2.3;
 
 /**
- * 按屏幕大小摆镜头：球门尽量宽，又要在上面留出记分的地方、在球下面留出划手指的地方。
+ * 按屏幕大小摆镜头：镜头在球的正后方、对着球门中间；球门尽量宽，
+ * 又要在上面留出记分的地方、在球下面留出划手指的地方。
  * top：横梁最高能到的屏幕位置；ballMaxY：球最低能到的屏幕位置。
+ * 任意球离得远，镜头退得更远一些；人墙会挡住一部分球门，要从人墙上面或旁边绕过去。
  */
-export function makeCamera(width: number, top: number, ballMaxY: number): Camera {
-  const z = SPOT_Z + CAM_BACK;
-  const fByWidth = (width * 0.86 * z) / GOAL_W;
+export function makeCamera(width: number, top: number, ballMaxY: number, spot: Spot = PENALTY_SPOT): Camera {
+  const pen = isPenalty(spot);
+  // 任意球：镜头在球后 5 米、2.4 米高，人墙正好挡住球门靠近角那边的下半截
+  const back = pen ? CAM_BACK : 5;
+  const camY = pen ? CAM_Y : 2.4;
+  const dist = Math.hypot(spot.x, spot.z);
+  const x = spot.x + (spot.x / dist) * back;
+  const z = spot.z + (spot.z / dist) * back;
+  const camDist = Math.hypot(x, z);
+  const yaw = Math.atan2(-x, z);
+  const fByWidth = (width * 0.86 * camDist) / GOAL_W;
   // 从横梁到球，屏幕上的高度 = f × (镜头高 / 球的距离 + (门高 - 镜头高) / 球门的距离)
-  const span = CAM_Y / CAM_BACK + (GOAL_H - CAM_Y) / z;
+  const span = camY / back + (GOAL_H - camY) / camDist;
   const f = Math.min(fByWidth, (ballMaxY - top) / span);
-  const horizon = ballMaxY - (CAM_Y * f) / CAM_BACK;
-  return { z, y: CAM_Y, f, cx: width / 2, horizon };
+  const horizon = ballMaxY - (camY * f) / back;
+  return { x, y: camY, z, yaw, f, cx: width / 2, horizon };
 }
 
 export interface ScreenPoint {
@@ -77,15 +101,27 @@ export interface ScreenPoint {
 }
 
 export function project(cam: Camera, x: number, y: number, z: number): ScreenPoint {
-  const d = Math.max(0.3, cam.z - z);
+  const rx = x - cam.x;
+  const rz = z - cam.z;
+  const sin = Math.sin(cam.yaw);
+  const cos = Math.cos(cam.yaw);
+  // 往前（朝球门）是 (sin, -cos)，往右是 (cos, sin)
+  const d = Math.max(0.3, rx * sin - rz * cos);
+  const lateral = rx * cos + rz * sin;
   const s = cam.f / d;
-  return { x: cam.cx + x * s, y: cam.horizon + (cam.y - y) * s, s };
+  return { x: cam.cx + lateral * s, y: cam.horizon + (cam.y - y) * s, s };
 }
 
 /** 屏幕上一点，对应球门线所在平面（z = 0）上的哪个位置。 */
 export function unprojectGoalPlane(cam: Camera, sx: number, sy: number): { x: number; y: number } {
-  const s = cam.f / cam.z;
-  return { x: (sx - cam.cx) / s, y: cam.y - (sy - cam.horizon) / s };
+  const sin = Math.sin(cam.yaw);
+  const cos = Math.cos(cam.yaw);
+  const a = (sx - cam.cx) / cam.f;
+  const b = -(sy - cam.horizon) / cam.f;
+  // 视线方向 = 往前 + a × 往右 + b × 往上；走到 z = 0 为止
+  const dz = -cos + a * sin;
+  const d = Math.abs(dz) > 1e-6 ? -cam.z / dz : 0;
+  return { x: cam.x + d * (sin + a * cos), y: cam.y + b * d };
 }
 
 // ---------- 射门 ----------
@@ -116,6 +152,13 @@ export interface Shot {
   chip?: boolean;
   /** 被风吹偏了多少米（已经算在 tx 里；飞行路线后半段才偏过去） */
   drift?: number;
+  /** 从哪里踢的（点球点或任意球的位置） */
+  ox: number;
+  oz: number;
+  /** 球飞到最高时比直线高出多少米（任意球要吊过人墙，最后往下勾一下会更高、下坠更狠） */
+  arc: number;
+  /** 下坠：0～1 */
+  dip: number;
 }
 
 /** 罚球球员的三项能力（1～5），见 players.ts。 */
@@ -158,7 +201,8 @@ export function swipeSpeed(points: Swipe['points'], toGoal: number): number {
  * - 力量：看这一划最快的时候有多快。越快球越快，但越容易偏。
  * - 弧线有顺逆：右脚顺的是「先往右再拐回左」，反方向只能弯一点、还更容易偏。
  */
-export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng, kicker: Kicker, wind = 0): Shot | SwipeProblem {
+export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng: Rng, kicker: Kicker, wind = 0, spot: Spot = PENALTY_SPOT): Shot | SwipeProblem {
+  const pen = isPenalty(spot);
   const pts = swipe.points;
   const a = pts[0]!;
   const b = pts[pts.length - 1]!;
@@ -187,88 +231,76 @@ export function shotFromSwipe(cam: Camera, ball: ScreenPoint, swipe: Swipe, rng:
   // 力量
   const speed = swipeSpeed(pts, toGoal);
   const power = weak ? 0 : clamp01((speed - 2) / (7.5 - 2));
-  const fastest = 0.52 - 0.035 * (kicker.power - 1);
-  const time = weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - fastest) * power;
 
   // 弧线：最开始划的方向（离起点一小段距离的那一点）延长到球门线
+  // 球的横向位置 x(u) = 起点 + (落点 - 起点) × u + 弧线 × 4u(1-u)，所以一开始的方向指向「落点 + 4 × 弧线」
   let bend = 0;
-  let outside = false;
   if (!weak) {
     const launch = pts.find((p) => Math.hypot(p.x - a.x, p.y - a.y) >= toGoal * 0.35) ?? b;
     const ly = launch.y - a.y;
     if (ly < -4) {
       const x0 = unprojectGoalPlane(cam, ball.x + (launch.x - a.x) * (toGoal / -ly), goalLine).x;
-      // 球的横向位置 x(u) = 落点 × u + 弧线 × 4u(1-u)，一开始的方向是 落点 + 4 × 弧线
-      const raw = (x0 - aimX) / 4;
-      const against = kicker.curveSide !== 0 && Math.sign(raw) === -kicker.curveSide;
-      const limit = (0.35 + 0.3 * (kicker.curve - 1)) * (against ? 0.4 : 1);
-      bend = clamp(raw, -limit, limit);
-      outside = against;
+      bend = (x0 - aimX) / 4;
     }
   }
 
-  // 脚下的偏差：越用力越不准，弧线越大越不准，球员越准偏得越少
-  const sd = shotSpread(aimX, aimY, power, kicker.accuracy) + Math.abs(bend) * (outside ? 0.25 : 0.06);
+  // 下坠：手指划到最高处以后又往下勾了一点（只有任意球用得上）
+  let dip = 0;
+  if (!pen && !weak) {
+    let peak = a.y;
+    for (const p of pts) peak = Math.min(peak, p.y);
+    // 往回勾「球到门线」距离的四分之一就是最狠的下坠
+    dip = clamp01(((b.y - peak) / toGoal) * 4);
+  }
+  return buildShot({ aimX, aimY, weak, power, bend, dip }, kicker, rng, wind, spot);
+}
+
+/** 玩家想怎么踢（从手指划的一下读出来的）。 */
+export interface Intent {
+  aimX: number;
+  aimY: number;
+  weak: boolean;
+  /** 0～1 */
+  power: number;
+  /** 想要的弧线（米，还没按球员能力限制） */
+  bend: number;
+  /** 0～1 */
+  dip: number;
+}
+
+/**
+ * 按球员能力、距离、风，把「想怎么踢」变成真正踢出去的球（加上脚下的偏差）。
+ * 平衡测试的模拟玩家也用这个，保证和真游戏的规则一样。
+ */
+export function buildShot(it: Intent, kicker: Kicker, rng: Rng, wind = 0, spot: Spot = PENALTY_SPOT): Shot {
+  const pen = isPenalty(spot);
+  const dist = Math.hypot(spot.x, spot.z);
+  const { aimX, aimY, weak, power, dip } = it;
+  const fastest = 0.52 - 0.035 * (kicker.power - 1);
+  // 任意球：球速 13～27 米/秒左右，看力量和球员的力量能力
+  const fkSpeed = 13 + 12 * power + 1.4 * (kicker.power - 1) * power;
+  const time = pen ? (weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - fastest) * power) : dist / (weak ? 9 : fkSpeed);
+
+  // 弧线有顺逆，点球离得近拐不了多大，任意球远能拐得很大
+  const against = kicker.curveSide !== 0 && Math.sign(it.bend) === -kicker.curveSide;
+  const limit = (0.35 + 0.3 * (kicker.curve - 1)) * (against ? 0.4 : 1) * (pen ? 0.5 : 1.7);
+  const bend = weak ? 0 : clamp(it.bend, -limit, limit);
+  // 任意球的弧度：越轻越高，下坠越狠越高（最高点大约 3 米）；又大力又不勾，就是一条平线
+  const arc = pen ? 0.12 + (1 - power) * 0.35 : weak ? 0 : 0.45 + (1 - power) * 1.5 + dip * 1.2;
+
+  // 脚下的偏差：越用力越不准，弧线越大越不准，球员越准偏得越少；任意球越远越不准
+  const sd = (shotSpread(aimX, aimY, power, kicker.accuracy) + Math.abs(bend) * (against ? 0.25 : 0.06)) * (pen ? 1 : 1 + (dist - SPOT_Z) / 22);
   // 风：球飞得越久，被吹得越偏
   const drift = weak ? 0 : wind * time * 0.42;
   const tx = aimX + gauss(rng) * sd + drift;
   const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
 
-  // 勺子：会踢勺子的球员，往中间偏上轻轻一挑
-  if (kicker.chip && !weak && power < 0.25 && Math.abs(aimX) < 1.4 && aimY >= 0.6) {
-    return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power, time: 1.0, bend: 0, weak, chip: true };
+  const o = { ox: spot.x, oz: spot.z };
+  // 勺子：会踢勺子的球员，点球时往中间偏上轻轻一挑
+  if (pen && kicker.chip && !weak && power < 0.25 && Math.abs(aimX) < 1.4 && aimY >= 0.6) {
+    return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power, time: 1.0, bend: 0, weak, chip: true, ...o, arc: 1.3, dip: 0 };
   }
-
-  return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak, drift };
-}
-
-// ---------- 进阶操作：先瞄准，再蓄力 ----------
-
-/** 进阶操作的瞄准：dir 左右（-1 最左，1 最右），elev 高低（0 贴地，1 很高，超过横梁）。 */
-export interface Aim {
-  dir: number;
-  elev: number;
-}
-
-/** 瞄准对应球门平面上的哪一点（箭头指向这里，但不画出来）。 */
-export function aimPoint(a: Aim): { x: number; y: number } {
-  return { x: a.dir * (HALF_W + 0.5), y: 0.12 + a.elev * 2.75 };
-}
-
-/**
- * 进阶操作的一脚：
- * - power：蓄力条，0～1 是正常，超过 1 是蓄过头（球会往上飞），最多 1.3；
- * - curve：松手时往旁边滑了多少（-1～1），决定弧线；
- * - reaim：助跑途中改了多少方向（米），改得越多越难踢准。
- */
-export function shotFromAim(aim: Aim, power: number, curve: number, kicker: Kicker, rng: Rng, wind = 0, reaim = 0): Shot {
-  const p = clamp(power, 0, 1.3);
-  const pw = Math.min(1, p);
-  const target = aimPoint(aim);
-  const aimX = target.x;
-  const aimY = target.y + Math.max(0, p - 1) * 3.5;
-  const weak = p < 0.12;
-  const fastest = 0.52 - 0.035 * (kicker.power - 1);
-  const time = weak ? 1.15 : SHOT_TIME_SLOW - (SHOT_TIME_SLOW - fastest) * pw;
-  let bend = 0;
-  let outside = false;
-  if (!weak && curve !== 0) {
-    outside = kicker.curveSide !== 0 && Math.sign(curve) !== kicker.curveSide;
-    const limit = (0.35 + 0.3 * (kicker.curve - 1)) * (outside ? 0.4 : 1);
-    bend = clamp(curve, -1, 1) * limit;
-  }
-  if (kicker.chip && !weak && pw < 0.25 && Math.abs(aimX) < 1.4 && aimY >= 0.6) {
-    return { aimX, aimY, zone: zoneOf(aimX, aimY), tx: aimX + gauss(rng) * 0.08, ty: Math.min(2.2, aimY), power: pw, time: 1.0, bend: 0, weak, chip: true };
-  }
-  const sd =
-    shotSpread(aimX, aimY, pw, kicker.accuracy) +
-    Math.abs(bend) * (outside ? 0.25 : 0.06) +
-    reaim * 0.3 +
-    Math.max(0, p - 1) * 0.6;
-  const drift = weak ? 0 : wind * time * 0.42;
-  const tx = aimX + gauss(rng) * sd + drift;
-  const ty = Math.max(BALL_R, aimY + gauss(rng) * sd * 0.8);
-  return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power: pw, time, bend, weak, drift };
+  return { aimX, aimY, zone: zoneOf(aimX, aimY), tx, ty, power, time, bend, weak, drift, ...o, arc: weak ? 0 : arc, dip: pen ? 0 : dip };
 }
 
 /**
@@ -282,7 +314,7 @@ export function shotSpread(aimX: number, aimY: number, power: number, accuracy: 
 
 /** 球速（公里每小时），踢出去以后显示。 */
 export function ballSpeedKmh(shot: Shot): number {
-  const dist = Math.hypot(SPOT_Z, shot.tx, shot.ty) + Math.abs(shot.bend) * 0.3;
+  const dist = Math.hypot(shot.oz, shot.tx - shot.ox, shot.ty) + Math.abs(shot.bend) * 0.3;
   return Math.round((dist / shot.time) * 3.6);
 }
 
@@ -305,10 +337,11 @@ export function gauss(rng: Rng): number {
 export function ballAt(shot: Shot, t: number): { x: number; y: number; z: number } {
   const u = clamp01(t / shot.time);
   const bump = 4 * u * (1 - u);
-  const arc = shot.chip ? 1.3 : shot.weak ? 0 : 0.12 + (1 - shot.power) * 0.35;
+  // 下坠球：最高点往后挪，后半段掉得更快
+  const lift = shot.dip > 0 ? bump * (1 + shot.dip * 0.6 * (1 - u)) - shot.dip * 0.3 * u * u * (1 - u) * 4 : bump;
   return {
-    x: shot.tx * u + shot.bend * bump + (shot.drift ?? 0) * (u * u - u),
-    y: Math.max(BALL_R, BALL_R + (shot.ty - BALL_R) * u + arc * bump),
-    z: SPOT_Z * (1 - u),
+    x: shot.ox + (shot.tx - shot.ox) * u + shot.bend * bump + (shot.drift ?? 0) * (u * u - u),
+    y: Math.max(BALL_R, BALL_R + (shot.ty - BALL_R) * u + shot.arc * lift),
+    z: shot.oz * (1 - u),
   };
 }

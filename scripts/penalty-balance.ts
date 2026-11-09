@@ -10,8 +10,9 @@
  * - skilled：高手，专踢死角、大力、会看门将晃、会顶着风瞄。
  */
 import { Rng } from '../src/games/shared/rng.ts';
-import { chooseGuess, chooseTell, chooseWait, freqModel, GOALS_TO_CLEAR, isGoal, LIVES, PERSONAS, resolveShot, type Persona } from '../src/games/penalty/keeper.ts';
-import { gauss, SHOT_TIME_SLOW, shotSpread, zoneCol, zoneOf, zoneRow, ZONES, type Shot, type Zone } from '../src/games/penalty/world.ts';
+import { checkWall, FREE_KICKS, makeWall, type FreeKickSpot } from '../src/games/penalty/freekick.ts';
+import { chooseGuess, chooseTell, chooseWait, freqModel, GOALS_TO_CLEAR, isGoal, LIVES, PERSONAS, resolveFreeKick, resolveShot, type Persona } from '../src/games/penalty/keeper.ts';
+import { buildShot, gauss, HALF_W, SHOT_TIME_SLOW, shotSpread, SPOT_Z, zoneCol, zoneOf, zoneRow, ZONES, type Shot, type Zone } from '../src/games/penalty/world.ts';
 
 export type Strategy = 'random' | 'human' | 'repeat' | 'anti' | 'skilled';
 
@@ -92,10 +93,38 @@ export function makeShot(zone: Zone, rng: Rng, skilled = false, wind = 0): Shot 
     bend: 0,
     weak: false,
     drift,
+    ox: 0,
+    oz: SPOT_Z,
+    arc: 0.12 + (1 - power) * 0.35,
+    dip: 0,
   };
 }
 
-function oneShot(p: Persona, strategy: Strategy, history: Zone[], rng: Rng): ReturnType<typeof resolveShot> {
+/**
+ * 一脚任意球。高手：一半从人墙上面吊近角（下坠），一半画弧线绕人墙打远角，大力；
+ * 普通玩家：瞄得没那么贴边，弧线和下坠用得少。
+ */
+export function freeKickShot(p: Persona, spot: FreeKickSpot, strategy: Strategy, rng: Rng): ReturnType<typeof resolveShot> {
+  const wall = makeWall(spot);
+  const near = spot.x > 1 ? 1 : -1;
+  const skilled = strategy === 'skilled';
+  const overWall = rng.chance(1, 2);
+  const edge = skilled ? 0.35 + u(rng) * 0.5 : 0.6 + u(rng) * 1.2;
+  const side = overWall ? near : -near;
+  const aimX = side * (HALF_W - edge) + gauss(rng) * (skilled ? 0.12 : 0.25);
+  const aimY = (overWall ? 1.7 : 1.2) + u(rng) * (skilled ? 0.6 : 0.8);
+  const power = overWall ? 0.35 + u(rng) * 0.35 : 0.55 + u(rng) * 0.4;
+  // 打门将那一边：弧线往外鼓（先往门柱外面飞，再拐进来），门将判断不准
+  const bend = overWall ? 0 : side * (skilled ? 1.0 + u(rng) * 0.7 : 0.3 + u(rng) * 0.6);
+  const dip = overWall ? (skilled ? 0.6 + u(rng) * 0.4 : u(rng) * 0.6) : u(rng) * 0.3;
+  const wind = p.wind * (u(rng) * 2 - 1);
+  const kicker = { power: 3, accuracy: skilled ? 3.5 : 3, curve: skilled ? 4 : 3, curveSide: 0 as const };
+  const shot = buildShot({ aimX: aimX - (skilled ? 0.7 : 0.3) * wind * 0.4, aimY, weak: false, power, bend, dip }, kicker, rng, wind, spot);
+  return resolveFreeKick(p, shot, wall, checkWall(shot, wall), { read: skilled ? 0.09 : 0.15 });
+}
+
+function oneShot(p: Persona, strategy: Strategy, history: Zone[], rng: Rng, spotId = 'pen'): ReturnType<typeof resolveShot> {
+  if (spotId !== 'pen') return freeKickShot(p, FREE_KICKS[spotId]!, strategy, rng);
   const waiting = chooseWait(p, rng);
   const guess = chooseGuess(p, history, rng);
   const lean = waiting ? 0 : chooseTell(p, guess, rng);
@@ -131,8 +160,10 @@ export function successRate(p: Persona, strategy: Strategy, shots: number, seed:
 export function simulateStage(p: Persona, strategy: Strategy, rng: Rng, history: Zone[]): boolean {
   let goals = 0;
   let lives = LIVES;
+  let n = 0;
   while (lives > 0 && goals < GOALS_TO_CLEAR) {
-    if (isGoal(oneShot(p, strategy, history, rng).outcome)) goals++;
+    const spot = p.shots[n++ % p.shots.length]!;
+    if (isGoal(oneShot(p, strategy, history, rng, spot).outcome)) goals++;
     else lives--;
   }
   return goals >= GOALS_TO_CLEAR;
@@ -154,6 +185,19 @@ if (import.meta.main) {
     const row = strategies.map((s) => {
       const r = successRate(p, s, 4000, 7);
       return `${(r.goal * 100).toFixed(0)}%进 ${(r.save * 100).toFixed(0)}%扑 ${(r.miss * 100).toFixed(0)}%偏`.padStart(18);
+    });
+    console.log(p.name.padEnd(8), row.join(''));
+  }
+  console.log('\n任意球进球率（高手 / 普通），每个门将：');
+  for (const p of PERSONAS) {
+    const row = Object.keys(FREE_KICKS).map((id) => {
+      const rate = (st: Strategy): number => {
+        const rng = new Rng(3);
+        let g = 0;
+        for (let i = 0; i < 1500; i++) if (isGoal(freeKickShot(p, FREE_KICKS[id]!, st, rng).outcome)) g++;
+        return g / 1500;
+      };
+      return `${id} ${(rate('skilled') * 100).toFixed(0)}/${(rate('human') * 100).toFixed(0)}`.padStart(12);
     });
     console.log(p.name.padEnd(8), row.join(''));
   }
