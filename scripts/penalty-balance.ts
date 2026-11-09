@@ -111,7 +111,7 @@ export function overWallWindow(spot: FreeKickSpot, kicker: Kicker): { lo: number
   for (let i = 0; i <= 100; i++) {
     const power = i / 100;
     const shot = buildFreeKick({ aimX: near * (HALF_W - 0.6), power, curve: 0 }, kicker, null, 0, spot);
-    if (!checkWall(shot, wall).blocked && shot.ty < GOAL_H - 0.15) {
+    if (!checkWall(shot, wall).blocked && shot.ty < GOAL_H - 0.15 && shot.ty > 0.4) {
       lo = Math.min(lo, power);
       hi = Math.max(hi, power);
     }
@@ -131,7 +131,8 @@ export function freeKickShot(p: Persona, spot: FreeKickSpot, strategy: Strategy,
   const kicker: Kicker = { power: 3, accuracy: skilled ? 3.5 : 3, curve: skilled ? 4 : 3, curveSide: 0 };
   const win = overWallWindow(spot, kicker);
   const mid = (win.lo + win.hi) / 2;
-  const handSd = skilled ? 0.05 : 0.13;
+  // 手上的快慢：发起人试玩说「中等速度基本都能越过人墙」，普通玩家也划得比较稳
+  const handSd = skilled ? 0.05 : 0.09;
   const wind = p.wind * (u(rng) * 2 - 1);
   const windAim = -(skilled ? 0.7 : 0.3) * wind * 0.4;
   const edge = skilled ? 0.35 + u(rng) * 0.5 : 0.6 + u(rng) * 1.2;

@@ -274,11 +274,11 @@ describe('点球：平衡（模拟玩家）', () => {
     expect(rates[9]).toBeLessThan(rates[0]! - 0.3);
   });
 
-  it('高手：第一关几乎都能过，最后一关大约一成', () => {
+  it('高手：第一关几乎都能过，最后一关很难（一成以下）', () => {
     expect(passRate(PERSONAS[0]!, 'skilled', 800, 11)).toBeGreaterThan(0.78);
     const last = passRate(PERSONAS[9]!, 'skilled', 800, 11);
-    expect(last).toBeGreaterThan(0.06);
-    expect(last).toBeLessThan(0.3);
+    expect(last).toBeGreaterThan(0.03);
+    expect(last).toBeLessThan(0.2);
   });
 
   it('任意球比点球难进：高手两到五成，普通玩家更低', () => {
@@ -327,7 +327,7 @@ describe('任意球（像实况）：左手转方向，右手划的快慢定高�
     const soft = fk({ power: 0.25 });
     expect(checkWall(soft, wall).blocked).toBe(true);
     expect(resolveFreeKick(PERSONAS[2]!, soft, wall, checkWall(soft, wall)).outcome).toBe('wall');
-    const good = fk({ power: 0.52 });
+    const good = fk({ power: 0.6 });
     expect(checkWall(good, wall).blocked).toBe(false);
     expect(checkWall(good, wall).over).toBe(true);
     expect(good.ty).toBeLessThan(GOAL_H - 0.2);
@@ -340,17 +340,18 @@ describe('任意球（像实况）：左手转方向，右手划的快慢定高�
     const farWall = makeWall(far);
     const ok = (sp: FreeKickSpot, w: typeof wall, power: number): boolean => {
       const s = fk({ aimX: (far.x > 1 ? 1 : -1) * (HALF_W - 0.6), power }, exact, sp);
-      return !checkWall(s, w).blocked && s.ty < GOAL_H - 0.15;
+      return !checkWall(s, w).blocked && s.ty < GOAL_H - 0.15 && s.ty > 0.4;
     };
-    // 30 米用 20 米刚好的力量，球会落在球门前；要大一些才行
-    expect(ok(far, farWall, 0.72)).toBe(true);
-    expect(fk({ power: 0.72 }).ty).toBeGreaterThan(GOAL_H);
+    // 30 米用 20 米刚好的力量，球会落在球门前、滚过去；要大一些才行
+    expect(ok(far, farWall, 0.78)).toBe(true);
+    expect(ok(far, farWall, 0.6)).toBe(false);
+    expect(fk({ power: 0.78 }).ty).toBeGreaterThan(GOAL_H);
   });
 
   it('球从人墙上面飞过，门将被挡住视线，反应更慢', () => {
     const p = PERSONAS[5]!;
-    const over = fk({ power: 0.52 });
-    const open = fk({ power: 0.52, aimX: -near * (HALF_W - 0.6) });
+    const over = fk({ power: 0.6 });
+    const open = fk({ power: 0.6, aimX: -near * (HALF_W - 0.6) });
     expect(checkWall(open, wall).over).toBe(false);
     expect(resolveFreeKick(p, over, wall, checkWall(over, wall)).late).toBeGreaterThan(resolveFreeKick(p, open, wall, checkWall(open, wall)).late + 0.15);
   });
@@ -371,6 +372,17 @@ describe('任意球（像实况）：左手转方向，右手划的快慢定高�
     const pen = buildShot({ aimX: 2, aimY: 1, weak: false, power: 0.6, bend: 9 }, exact, new Rng(1));
     expect(free.bend).toBeGreaterThan(pen.bend * 1.8);
     expect(pen.bend).toBeLessThan(0.8);
+  });
+
+  it('门将：慢球、往中间的球都扑得到；快的死角弧线球才进得去', () => {
+    const p = PERSONAS[9]!;
+    const res = (s: Shot): string => resolveFreeKick(p, s, wall, checkWall(s, wall)).outcome;
+    // 往中间的、带弧线的球（以前门将会被弧线骗到一边去）
+    expect(res(fk({ aimX: 1.5, power: 0.6, curve: 0.6 }))).toBe('save');
+    // 慢慢滚过去的球
+    expect(res(fk({ aimX: 3, power: 0.3, curve: 0 }))).not.toBe('goal');
+    // 又快又贴近角、越过人墙的球
+    expect(res(fk({ aimX: near * (HALF_W - 0.35), power: 0.64, curve: 0 }))).toBe('goal');
   });
 
   it('右手这一划：越快力量越大；划直了没有弧线，往右鼓是往右的弧线；往下划不算', () => {

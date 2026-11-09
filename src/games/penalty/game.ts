@@ -634,6 +634,7 @@ class Penalty implements Game {
       if (outcome === 'save') {
         this.host.sound.play('save');
         this.host.vibrate('light');
+        if (fk && this.res?.dive.fly) sub = '飞身扑救！';
         if (!fk && this.guess === shot.zone) {
           this.read++;
           sub = `门将猜中了：${ZONE_NAMES[shot.zone]}`;

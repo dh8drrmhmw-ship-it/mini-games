@@ -320,7 +320,7 @@ export interface FreeKickIntent {
 /** 任意球的「重力」：真球有空气阻力和上旋，往下掉得比只有重力时快。 */
 export const FK_GRAVITY = 17.2;
 /** 上旋让球在后半段额外往下掉多少米（越往后掉得越快）。 */
-export const FK_SINK = 1.5;
+export const FK_SINK = 1.0;
 
 /**
  * 右手这一划：最快的时候有多快 → 力量；划出来的弯有多大 → 弧线。
@@ -369,9 +369,10 @@ export function buildFreeKick(it: FreeKickIntent, kicker: Kicker, rng: Rng | nul
   const aimX = it.aimX + noise() * sd;
 
   // 飞行：水平速度和起脚的竖直速度都看力量
-  const speed = 14 + 13 * power + 1.3 * (kicker.power - 1) * power;
+  // 力量大主要是更快，也高一些：稍微大一点只会刚好高出横梁，不会飞上看台
+  const speed = 16 + 11.4 * power + 1.3 * (kicker.power - 1) * power;
   const time = dist / speed;
-  const vy = 4 + 12 * power;
+  const vy = 4 + 10 * power;
   // 高度：y(u) = 起脚高度 + vy·T·u − ½gT²·u² − 上旋·u³（u 是飞了几成）
   const drop = (FK_GRAVITY * time * time) / 2;
   let ty = BALL_R + vy * time - drop - FK_SINK;

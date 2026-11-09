@@ -358,6 +358,8 @@ export interface Dive {
   handY: number;
   /** 扑到一半时球就到了：0～1 */
   progressAtBall: number;
+  /** 飞身扑救：整个人腾空、身体横过来（任意球扑远角时） */
+  fly?: boolean;
 }
 
 /** 罚球球员的绝招对扑救的影响。 */
@@ -393,6 +395,11 @@ export function diveProgress(p: Persona, t: number, late = 0): number {
 export function bodyLine(d: Dive, q: number): { fx: number; fy: number; hx: number; hy: number } {
   const hx = d.startX + (d.handX - d.startX) * q;
   const hy = 1.45 + (d.handY - 1.45) * q;
+  if (d.fly) {
+    // 飞身扑：脚离地，身体差不多横着，整个人往球那边飞出去
+    const spread = Math.min(1, Math.abs(d.handX - d.startX) / 1.5);
+    return { fx: d.startX + (d.handX - d.startX) * 0.38 * q, fy: 0.12 + (0.25 + d.handY * 0.45) * q * spread, hx, hy };
+  }
   const fx = d.startX + (d.handX - d.startX) * 0.28 * q;
   const fy = 0.12 + Math.max(0, d.handY * 0.3) * q;
   return { fx, fy, hx, hy };
@@ -476,15 +483,21 @@ function judge(p: Persona, shot: Shot, dive: Dive, late: number, opts: ShotOptio
  */
 export function resolveFreeKick(p: Persona, shot: Shot, wall: Wall, check: WallCheck, opts: ShotOptions = {}): Resolution {
   const startX = wall.keeperX;
-  const late = (opts.late ?? 0) + 0.05 + (check.over ? 0.22 : 0) - Math.min(0.2, opts.read ?? 0);
-  const range = p.range + 0.55;
-  const seen = shot.tx + shot.bend * 1.6 * (opts.curveTrick ?? 1);
+  // 球从人墙上面过来，门将看得晚一点
+  const late = (opts.late ?? 0) + 0.05 + (check.over ? 0.18 : 0) - Math.min(0.2, opts.read ?? 0);
+  // 球飞得越久，门将能移动、扑得越远
+  const range = p.range + 0.55 + 0.9 * Math.max(0, shot.time - 0.8);
+  // 弧线骗人：一开始的方向和最后的落点不一样；球越快越骗得过，慢球门将看得清；
+  // 会在空中调整的门将（adjust 高）被骗得少
+  const fool = Math.min(1, Math.max(0, (1.35 - shot.time) / 0.5)) * (1 - p.adjust * 0.6);
+  const seen = shot.tx + shot.bend * 1.2 * fool * (opts.curveTrick ?? 1);
   const handX = Math.max(startX - range, Math.min(startX + range, seen));
   const handY = Math.min(2.25 + (p.height - 1.88), Math.max(0.3, shot.ty));
   const progress = diveProgress(p, shot.time, late);
-  const dive: Dive = { startX, handX, handY, progressAtBall: progress };
+  const dive: Dive = { startX, handX, handY, progressAtBall: progress, fly: Math.abs(handX - startX) > 1.2 };
   if (check.blocked) return { outcome: 'wall', dive: { ...dive, progressAtBall: 0 }, closest: 9, late };
-  return judge(p, shot, dive, late, opts);
+  // 扑任意球全身伸展开，手套能多够一点
+  return judge({ ...p, reach: p.reach + 0.05 }, shot, dive, late, opts);
 }
 
 export function isGoal(o: Outcome): boolean {
