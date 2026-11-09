@@ -12,7 +12,7 @@
 import { Rng } from '../src/games/shared/rng.ts';
 import { checkWall, FREE_KICKS, makeWall, type FreeKickSpot } from '../src/games/penalty/freekick.ts';
 import { chooseGuess, chooseTell, chooseWait, freqModel, GOALS_TO_CLEAR, isGoal, LIVES, PERSONAS, resolveFreeKick, resolveShot, type Persona } from '../src/games/penalty/keeper.ts';
-import { buildShot, gauss, HALF_W, SHOT_TIME_SLOW, shotSpread, SPOT_Z, zoneCol, zoneOf, zoneRow, ZONES, type Shot, type Zone } from '../src/games/penalty/world.ts';
+import { buildFreeKick, gauss, GOAL_H, HALF_W, SHOT_TIME_SLOW, shotSpread, SPOT_Z, zoneCol, zoneOf, zoneRow, ZONES, type Kicker, type Shot, type Zone } from '../src/games/penalty/world.ts';
 
 export type Strategy = 'random' | 'human' | 'repeat' | 'anti' | 'skilled';
 
@@ -96,30 +96,60 @@ export function makeShot(zone: Zone, rng: Rng, skilled = false, wind = 0): Shot 
     ox: 0,
     oz: SPOT_Z,
     arc: 0.12 + (1 - power) * 0.35,
-    dip: 0,
   };
 }
 
 /**
- * 一脚任意球。高手：一半从人墙上面吊近角（下坠），一半画弧线绕人墙打远角，大力；
- * 普通玩家：瞄得没那么贴边，弧线和下坠用得少。
+ * 这个位置、这个球员，力量在什么范围内能越过人墙、又不飞过横梁（往近角瞄，不带弧线）。
+ * 高手心里有数；普通玩家大概知道，但手上没那么准。
+ */
+export function overWallWindow(spot: FreeKickSpot, kicker: Kicker): { lo: number; hi: number } {
+  const wall = makeWall(spot);
+  const near = spot.x > 1 ? 1 : -1;
+  let lo = 1;
+  let hi = 0;
+  for (let i = 0; i <= 100; i++) {
+    const power = i / 100;
+    const shot = buildFreeKick({ aimX: near * (HALF_W - 0.6), power, curve: 0 }, kicker, null, 0, spot);
+    if (!checkWall(shot, wall).blocked && shot.ty < GOAL_H - 0.15) {
+      lo = Math.min(lo, power);
+      hi = Math.max(hi, power);
+    }
+  }
+  return lo <= hi ? { lo, hi } : { lo: 0.6, hi: 0.6 };
+}
+
+/**
+ * 一脚任意球（规则和游戏里一样：左手定方向、右手划的快慢定力量和高低、划的弯定弧线）。
+ * 一半越过人墙打近角，一半画弧线绕到门将那边的远角。
+ * 高手：力量拿捏得准、瞄得贴边、弧线大；普通玩家：力量忽大忽小，瞄得没那么贴边。
  */
 export function freeKickShot(p: Persona, spot: FreeKickSpot, strategy: Strategy, rng: Rng): ReturnType<typeof resolveShot> {
   const wall = makeWall(spot);
   const near = spot.x > 1 ? 1 : -1;
   const skilled = strategy === 'skilled';
-  const overWall = rng.chance(1, 2);
-  const edge = skilled ? 0.35 + u(rng) * 0.5 : 0.6 + u(rng) * 1.2;
-  const side = overWall ? near : -near;
-  const aimX = side * (HALF_W - edge) + gauss(rng) * (skilled ? 0.12 : 0.25);
-  const aimY = (overWall ? 1.7 : 1.2) + u(rng) * (skilled ? 0.6 : 0.8);
-  const power = overWall ? 0.35 + u(rng) * 0.35 : 0.55 + u(rng) * 0.4;
-  // 打门将那一边：弧线往外鼓（先往门柱外面飞，再拐进来），门将判断不准
-  const bend = overWall ? 0 : side * (skilled ? 1.0 + u(rng) * 0.7 : 0.3 + u(rng) * 0.6);
-  const dip = overWall ? (skilled ? 0.6 + u(rng) * 0.4 : u(rng) * 0.6) : u(rng) * 0.3;
+  const kicker: Kicker = { power: 3, accuracy: skilled ? 3.5 : 3, curve: skilled ? 4 : 3, curveSide: 0 };
+  const win = overWallWindow(spot, kicker);
+  const mid = (win.lo + win.hi) / 2;
+  const handSd = skilled ? 0.05 : 0.13;
   const wind = p.wind * (u(rng) * 2 - 1);
-  const kicker = { power: 3, accuracy: skilled ? 3.5 : 3, curve: skilled ? 4 : 3, curveSide: 0 as const };
-  const shot = buildShot({ aimX: aimX - (skilled ? 0.7 : 0.3) * wind * 0.4, aimY, weak: false, power, bend, dip }, kicker, rng, wind, spot);
+  const windAim = -(skilled ? 0.7 : 0.3) * wind * 0.4;
+  const edge = skilled ? 0.35 + u(rng) * 0.5 : 0.6 + u(rng) * 1.2;
+  let it: { aimX: number; power: number; curve: number };
+  if (rng.chance(1, 2)) {
+    // 越过人墙打近角
+    it = { aimX: near * (HALF_W - edge) + windAim, power: mid + gauss(rng) * handSd, curve: 0 };
+  } else {
+    // 往门将那边的远角：先往门柱外面飞，再拐进来
+    const side = -near;
+    const curve = side * (skilled ? 0.6 + u(rng) * 0.4 : 0.2 + u(rng) * 0.6);
+    const bend = curve * (0.35 + 0.3 * (kicker.curve - 1));
+    const target = side * (HALF_W - edge);
+    const aimErr = gauss(rng) * (skilled ? 0.3 : 0.9);
+    it = { aimX: target + 4 * bend + aimErr + windAim, power: Math.min(win.hi, 0.75) - 0.08 + gauss(rng) * handSd, curve };
+  }
+  it.power = Math.min(1, Math.max(0, it.power));
+  const shot = buildFreeKick(it, kicker, rng, wind, spot);
   return resolveFreeKick(p, shot, wall, checkWall(shot, wall), { read: skilled ? 0.09 : 0.15 });
 }
 

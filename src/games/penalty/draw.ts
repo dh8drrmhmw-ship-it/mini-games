@@ -631,7 +631,7 @@ export interface WallLook {
 
 /**
  * 人墙：几个防守球员并排站，双手护在身前，面朝罚球的人。
- * people：每人脚下的位置；tangent：沿着人墙的方向；jump：0～1，跳起来多高（最高 0.42 米）。
+ * people：每人脚下的位置；tangent：沿着人墙的方向；jump：0～1，跳起来多高（最高 0.37 米，和人墙能挡的高度一样）。
  */
 export function drawWall(ctx: Canvas2D, cam: Camera, people: readonly { x: number; z: number }[], tangent: { x: number; z: number }, jump: number, look: WallLook): void {
   ctx.save();
@@ -656,7 +656,7 @@ export function drawWall(ctx: Canvas2D, cam: Camera, people: readonly { x: numbe
     const g = project(cam, m.x, 0, m.z);
     const s = g.s;
     const tall = 1 + ((m.i * 37) % 5) * 0.02 - 0.04;
-    const lift = jump * 0.42 * s;
+    const lift = jump * 0.37 * s;
     const x = g.x;
     const y0 = g.y - lift;
     // 影子

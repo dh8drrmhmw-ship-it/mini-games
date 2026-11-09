@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { freeKickShot, passRate, successRate } from '../scripts/penalty-balance.ts';
-import { checkWall, FREE_KICKS, makeWall, WALL_DIST, wallPeople } from '../src/games/penalty/freekick.ts';
+import { checkWall, FREE_KICKS, makeWall, WALL_DIST, wallPeople, type FreeKickSpot } from '../src/games/penalty/freekick.ts';
 import { rankFor } from '../src/games/penalty/game.ts';
 import { chooseGuess, isGoal, LIVES, patternCallout, PERSONAS, predict, resolveFreeKick, resolveShot, starsFor } from '../src/games/penalty/keeper.ts';
 import { BOOTS, kickerFor, SHOOTERS, unlocksAt } from '../src/games/penalty/players.ts';
-import { ballAt, buildShot, GOAL_H, makeCamera, project, shotFromSwipe, unprojectGoalPlane, zoneOf, type Intent, type Kicker, type Shot, type Spot, type Zone } from '../src/games/penalty/world.ts';
+import {
+  aimCamera,
+  ballAt,
+  buildFreeKick,
+  buildShot,
+  GOAL_H,
+  HALF_W,
+  makeCamera,
+  project,
+  readFreeKickSwipe,
+  shotFromSwipe,
+  unprojectGoalPlane,
+  zoneOf,
+  type FreeKickIntent,
+  type Kicker,
+  type Shot,
+  type Zone,
+} from '../src/games/penalty/world.ts';
 import { Rng } from '../src/games/shared/rng.ts';
 
 const cam = makeCamera(390, 150, 640);
@@ -31,7 +48,7 @@ function swipeTo(x: number, y: number, duration = 0.25, kicker = normal, seed = 
 }
 
 function shot(tx: number, ty: number, time = 0.6): Shot {
-  return { aimX: tx, aimY: ty, zone: zoneOf(tx, ty), tx, ty, power: 0.5, time, bend: 0, weak: false, ox: 0, oz: 11, arc: 0.2, dip: 0 };
+  return { aimX: tx, aimY: ty, zone: zoneOf(tx, ty), tx, ty, power: 0.5, time, bend: 0, weak: false, ox: 0, oz: 11, arc: 0.2 };
 }
 
 describe('点球：手指划一下 → 射门', () => {
@@ -284,15 +301,14 @@ describe('点球：平衡（模拟玩家）', () => {
   });
 });
 
-describe('任意球：人墙、弧线、下坠', () => {
+describe('任意球（像实况）：左手转方向，右手划的快慢定高低、弯定弧线', () => {
   const spot = FREE_KICKS.c20!;
   const wall = makeWall(spot);
-  const exact: Kicker = { power: 3, accuracy: 5, curve: 4, curveSide: 0 };
-  /** 按想法踢一脚，再把脚下的偏差去掉，方便看规则本身。 */
-  const kick = (it: Partial<Intent>, at: Spot = spot): Shot => {
-    const s = buildShot({ aimX: 0, aimY: 1, weak: false, power: 0.6, bend: 0, dip: 0, ...it }, exact, new Rng(1), 0, at);
-    return { ...s, tx: s.aimX, ty: s.aimY };
-  };
+  const near = -1; // c20 的人墙挡左边
+  const exact: Kicker = { power: 3, accuracy: 5, curve: 3, curveSide: 0 };
+  /** 不加偏差踢一脚，方便看规则本身。 */
+  const fk = (it: Partial<FreeKickIntent>, kicker = exact, at: FreeKickSpot = spot): Shot =>
+    buildFreeKick({ aimX: near * (HALF_W - 0.6), power: 0.5, curve: 0, ...it }, kicker, null, 0, at);
 
   it('人墙站在 9.15 米外，挡住近角那一边；门将站另一边', () => {
     expect(Math.hypot(wall.x - spot.x, wall.z - spot.z)).toBeCloseTo(WALL_DIST, 5);
@@ -307,65 +323,91 @@ describe('任意球：人墙、弧线、下坠', () => {
     expect(right.keeperX).toBeLessThan(0);
   });
 
-  it('又低又平地踢近角：打在人墙上，算一次失误', () => {
-    const s = kick({ aimX: -2.6, aimY: 0.8, power: 0.85 });
-    const check = checkWall(s, wall);
-    expect(check.blocked).toBe(true);
-    expect(resolveFreeKick(PERSONAS[2]!, s, wall, check).outcome).toBe('wall');
+  it('往近角踢：力量小打在人墙上，力量合适越过人墙从横梁下面进，力量太大飞过横梁', () => {
+    const soft = fk({ power: 0.25 });
+    expect(checkWall(soft, wall).blocked).toBe(true);
+    expect(resolveFreeKick(PERSONAS[2]!, soft, wall, checkWall(soft, wall)).outcome).toBe('wall');
+    const good = fk({ power: 0.52 });
+    expect(checkWall(good, wall).blocked).toBe(false);
+    expect(checkWall(good, wall).over).toBe(true);
+    expect(good.ty).toBeLessThan(GOAL_H - 0.2);
+    expect(fk({ power: 0.9 }).ty).toBeGreaterThan(GOAL_H + 0.3);
   });
 
-  it('往近角吊、最后往下勾（下坠）：从人墙上面过去，再掉进球门', () => {
-    const s = kick({ aimX: -2.6, aimY: 1.9, power: 0.55, dip: 0.9 });
-    const check = checkWall(s, wall);
-    expect(check.blocked).toBe(false);
-    expect(check.over).toBe(true);
-    expect(ballAt(s, s.time).y).toBeLessThan(GOAL_H);
-    // 下坠越狠，飞过人墙时越高
-    const flat = kick({ aimX: -2.6, aimY: 1.9, power: 0.55, dip: 0 });
-    const hAt = (x: Shot): number => ballAt(x, checkWall(x, wall).u * x.time).y;
-    expect(hAt(s)).toBeGreaterThan(hAt(flat) + 0.8);
+  it('力量越大球越快；越远要的力量越大', () => {
+    expect(fk({ power: 0.8 }).time).toBeLessThan(fk({ power: 0.4 }).time);
+    const far = FREE_KICKS.l30!;
+    const farWall = makeWall(far);
+    const ok = (sp: FreeKickSpot, w: typeof wall, power: number): boolean => {
+      const s = fk({ aimX: (far.x > 1 ? 1 : -1) * (HALF_W - 0.6), power }, exact, sp);
+      return !checkWall(s, w).blocked && s.ty < GOAL_H - 0.15;
+    };
+    // 30 米用 20 米刚好的力量，球会落在球门前；要大一些才行
+    expect(ok(far, farWall, 0.72)).toBe(true);
+    expect(fk({ power: 0.72 }).ty).toBeGreaterThan(GOAL_H);
   });
 
   it('球从人墙上面飞过，门将被挡住视线，反应更慢', () => {
     const p = PERSONAS[5]!;
-    const over = kick({ aimX: -2.6, aimY: 1.9, power: 0.55, dip: 0.9 });
-    const open = kick({ aimX: 2.6, aimY: 1.9, power: 0.55, dip: 0.9 });
+    const over = fk({ power: 0.52 });
+    const open = fk({ power: 0.52, aimX: -near * (HALF_W - 0.6) });
+    expect(checkWall(open, wall).over).toBe(false);
     expect(resolveFreeKick(p, over, wall, checkWall(over, wall)).late).toBeGreaterThan(resolveFreeKick(p, open, wall, checkWall(open, wall)).late + 0.15);
   });
 
-  it('同样想拐的弯，任意球比点球拐得多（点球离得近，弧线不夸张）', () => {
-    const fk = kick({ aimX: 2, bend: 3 });
-    const pen = kick({ aimX: 2, bend: 3 }, { x: 0, z: 11 });
-    expect(Math.abs(fk.bend)).toBeGreaterThan(Math.abs(pen.bend) * 2.5);
-    expect(Math.abs(pen.bend)).toBeLessThan(0.8);
+  it('球一开始沿着黄箭头（瞄准方向）飞，弧线让它慢慢拐开；弧线能力越高拐得越多', () => {
+    const s = fk({ aimX: 4, curve: 1 });
+    const early = ballAt(s, s.time * 0.02);
+    const dir = (early.x - s.ox) / (s.oz - early.z);
+    expect(dir).toBeCloseTo((4 - s.ox) / s.oz, 2);
+    expect(s.bend).toBeGreaterThan(0);
+    expect(s.tx).toBeLessThan(4 - 2);
+    const curler = fk({ aimX: 4, curve: 1 }, { ...exact, curve: 5 });
+    expect(curler.bend).toBeGreaterThan(s.bend * 1.4);
   });
 
-  it('镜头斜对着球门时，屏幕上的点也能换算回球门上的位置', () => {
+  it('同样想拐的弯，任意球比点球拐得多（点球离得近，弧线不夸张）', () => {
+    const free = fk({ aimX: 4, curve: 1 });
+    const pen = buildShot({ aimX: 2, aimY: 1, weak: false, power: 0.6, bend: 9 }, exact, new Rng(1));
+    expect(free.bend).toBeGreaterThan(pen.bend * 1.8);
+    expect(pen.bend).toBeLessThan(0.8);
+  });
+
+  it('右手这一划：越快力量越大；划直了没有弧线，往右鼓是往右的弧线；往下划不算', () => {
+    const swipe = (dur: number, bulge: number): Pt[] => {
+      const pts: Pt[] = [];
+      for (let i = 0; i <= 12; i++) {
+        const k = i / 12;
+        pts.push({ x: 250 + bulge * 4 * k * (1 - k), y: 640 - 300 * k, t: dur * k });
+      }
+      return pts;
+    };
+    const fast = readFreeKickSwipe(swipe(0.12, 0), 350);
+    const slow = readFreeKickSwipe(swipe(0.6, 0), 350);
+    if (typeof fast === 'string' || typeof slow === 'string') throw new Error('不该失败');
+    expect(fast.power).toBeGreaterThan(slow.power + 0.3);
+    expect(fast.curve).toBe(0);
+    const curved = readFreeKickSwipe(swipe(0.3, 50), 350);
+    if (typeof curved === 'string') throw new Error(curved);
+    expect(curved.curve).toBeGreaterThan(0.5);
+    const left = readFreeKickSwipe(swipe(0.3, -50), 350);
+    if (typeof left === 'string') throw new Error(left);
+    expect(left.curve).toBeLessThan(-0.5);
+    expect(readFreeKickSwipe([{ x: 250, y: 400, t: 0 }, { x: 250, y: 600, t: 0.2 }], 350)).toBe('down');
+  });
+
+  it('左手转镜头：球还在屏幕同一个地方，瞄准点在屏幕正中；斜着的镜头也能换算回球门上的位置', () => {
     for (const id of Object.keys(FREE_KICKS)) {
-      const c = makeCamera(390, 160, 640, FREE_KICKS[id]!);
-      const sp = project(c, 2.1, 1.4, 0);
-      const back = unprojectGoalPlane(c, sp.x, sp.y);
+      const sp = FREE_KICKS[id]!;
+      const base = makeCamera(390, 160, 640, sp);
+      const c = aimCamera(base, sp, 3.5);
+      expect(project(c, sp.x, 0.11, sp.z).x).toBeCloseTo(195, 3);
+      expect(project(c, sp.x, 0.11, sp.z).y).toBeCloseTo(project(base, sp.x, 0.11, sp.z).y, 3);
+      expect(project(c, 3.5, 0, 0).x).toBeCloseTo(195, 3);
+      const p = project(c, 2.1, 1.4, 0);
+      const back = unprojectGoalPlane(c, p.x, p.y);
       expect(back.x).toBeCloseTo(2.1, 4);
       expect(back.y).toBeCloseTo(1.4, 4);
-      // 球在屏幕正中下方
-      expect(project(c, FREE_KICKS[id]!.x, 0.11, FREE_KICKS[id]!.z).x).toBeCloseTo(195, 3);
     }
-  });
-
-  it('任意球划过头再往下勾一下：下坠球；点球没有下坠', () => {
-    const c = makeCamera(390, 160, 640, spot);
-    const b = project(c, spot.x, 0.11, spot.z);
-    const target = project(c, -2.4, 1.6, 0);
-    const toGoal = b.y - project(c, 0, 0, 0).y;
-    const pts: Pt[] = [];
-    for (let i = 0; i <= 10; i++) pts.push({ x: b.x + (target.x - b.x) * (i / 10), y: b.y + (target.y - 0.3 * toGoal - b.y) * (i / 10), t: i * 0.02 });
-    pts.push({ x: target.x, y: target.y, t: 0.3 });
-    const s = shotFromSwipe(c, b, { points: pts }, new Rng(1), exact, 0, spot);
-    if (typeof s === 'string') throw new Error(s);
-    expect(s.dip).toBeGreaterThan(0.8);
-    expect(s.aimX).toBeCloseTo(-2.4, 0);
-    const pen = shotFromSwipe(cam, ball, { points: line(-2.4, 1.6, 0.25) }, new Rng(1), exact);
-    if (typeof pen === 'string') throw new Error(pen);
-    expect(pen.dip).toBe(0);
   });
 });

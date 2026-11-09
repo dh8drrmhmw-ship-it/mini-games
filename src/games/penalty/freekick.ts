@@ -27,7 +27,7 @@ export const FREE_KICKS: Record<string, FreeKickSpot> = {
 export const WALL_DIST = 9.15;
 /** 每个人占多宽、多高（跳起来时头顶的高度） */
 export const WALL_MAN = 0.55;
-export const WALL_TOP = 2.2;
+export const WALL_TOP = 2.15;
 
 export interface Wall {
   /** 人墙中间的位置 */
